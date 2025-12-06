@@ -2,18 +2,19 @@
 # Usa un'immagine Python ufficiale e leggera come base.
 FROM python:3.11-slim
 
+# Installa git, necessario per il clone.
+RUN apt-get update && apt-get install -y git
+
 # Imposta la directory di lavoro all'interno del container.
 WORKDIR /app
 
-# Copia il file delle dipendenze.
-# Farlo prima del resto del codice sfrutta la cache di Docker se le dipendenze non cambiano.
-COPY requirements.txt .
+# CLONA il repository. Questo comando scarica TUTTI i file, incluso requirements.txt.
+RUN git clone https://github.com/nzo66/EasyProxy . 
 
 # Installa le dipendenze.
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copia il resto del codice dell'applicazione nella directory di lavoro.
-COPY . .
 
 # Metadata dell'immagine OCI (Open Container Initiative) corretti.
 LABEL org.opencontainers.image.title="HLS Proxy Server"
