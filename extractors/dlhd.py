@@ -8,6 +8,7 @@ import gzip
 import zlib
 import zstandard
 import random
+import time
 from urllib.parse import urlparse, quote_plus
 import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector, FormData
@@ -23,6 +24,7 @@ class ExtractorError(Exception):
 class DLHDExtractor:
     """DLHD Extractor con sessione persistente e gestione anti-bot avanzata"""
 
+
     def __init__(self, request_headers: dict, proxies: list = None):
         self.request_headers = request_headers
         self.base_headers = {
@@ -35,27 +37,49 @@ class DLHDExtractor:
         self.proxies = proxies or []
         self._extraction_locks: Dict[str, asyncio.Lock] = {} # ✅ NUOVO: Lock per evitare estrazioni multiple
         self.cache_file = os.path.join(os.path.dirname(__file__), '.dlhd_cache')
-        self._stream_data_cache: Dict[str, Dict[str, Any]] = self._load_cache()
         
-        # ✅ Lista host iframe (configurabile dinamicamente in futuro da Gist/JSON esterno)
-        self.iframe_hosts = [
-            'epicplayplay.cfd',
-        ]
+        # Carica cache e inizializza host
+        cache_data = self._load_cache()
+        self._stream_data_cache: Dict[str, Dict[str, Any]] = cache_data.get('streams', {})
+        
+        # ✅ Lista host iframe (caricata da cache o vuota)
+        self.iframe_hosts = cache_data.get('hosts', [])
+        
+        logger.info(f"Hosts caricati all'avvio: {self.iframe_hosts}")
 
-    def _load_cache(self) -> Dict[str, Dict[str, Any]]:
-        """Carica la cache da un file codificato in Base64 all'avvio."""
+    def _load_cache(self) -> Dict[str, Any]:
+        """Carica la cache da un file codificato in Base64 all'avvio. Ritorna struttura completa."""
         try:
             if os.path.exists(self.cache_file):
                 with open(self.cache_file, 'r', encoding='utf-8') as f:
                     logger.info(f"💾 Caricamento cache dal file: {self.cache_file}")
                     encoded_data = f.read()
                     if not encoded_data:
-                        return {}
-                    decoded_data = base64.b64decode(encoded_data).decode('utf-8')
-                    return json.loads(decoded_data)
-        except (IOError, json.JSONDecodeError) as e:
+                         # Tenta di gestire il vecchio formato o ritorna default
+                        return {'hosts': [], 'streams': {}}
+                    
+                    try:
+                        decoded_data = base64.b64decode(encoded_data).decode('utf-8')
+                        data = json.loads(decoded_data)
+                        
+                        # Retrocompatibilità: se la cache è il vecchio formato (dict di stream), convertilo
+                        if data and not ('hosts' in data and 'streams' in data):
+                             # Assumiamo che keys siano channel_ids
+                             # Verifica euristica: se le chiavi sono stringhe numeriche, è il vecchio formato
+                             is_old_format = any(k.isdigit() for k in data.keys())
+                             if is_old_format or not data:
+                                 logger.info("Rilevato vecchio formato cache, conversione in corso...")
+                                 return {'hosts': [], 'streams': data}
+                        
+                        return data
+                    except Exception:
+                        # Se fallisce decode, prova a leggerlo come JSON plain (fallback)
+                        f.seek(0)
+                        return json.load(f)
+
+        except (IOError, json.JSONDecodeError, Exception) as e:
             logger.error(f"❌ Errore durante il caricamento della cache: {e}. Inizio con una cache vuota.")
-        return {}
+        return {'hosts': [], 'streams': {}}
 
     def _get_random_proxy(self):
         """Restituisce un proxy casuale dalla lista."""
@@ -92,12 +116,46 @@ class DLHDExtractor:
         """Salva lo stato corrente della cache su un file, codificando il contenuto in Base64."""
         try:
             with open(self.cache_file, 'w', encoding='utf-8') as f:
-                json_data = json.dumps(self._stream_data_cache)
+                # Struttura completa
+                cache_data = {
+                    'hosts': self.iframe_hosts,
+                    'streams': self._stream_data_cache
+                }
+                json_data = json.dumps(cache_data)
                 encoded_data = base64.b64encode(json_data.encode('utf-8')).decode('utf-8')
                 f.write(encoded_data)
-                logger.info(f"💾 Cache codificata e salvata con successo nel file: {self.cache_file}")
+                logger.info(f"💾 Cache (stream + hosts) salvata con successo.")
         except IOError as e:
             logger.error(f"❌ Errore durante il salvataggio della cache: {e}")
+
+    async def _fetch_iframe_hosts(self) -> bool:
+        """Scarica la lista aggiornata degli host iframe."""
+        # URL offuscato per evitare scraping statico
+        encoded_url = "aHR0cHM6Ly9pZnJhbWUuZGxoZC5kcGRucy5vcmcv"
+        url = base64.b64decode(encoded_url).decode('utf-8')
+        
+        logger.info(f"🔄 Aggiornamento lista host iframe...")
+        try:
+            session = await self._get_session()
+            async with session.get(url, ssl=False, timeout=ClientTimeout(total=10)) as response:
+                if response.status == 200:
+                    text = await response.text()
+                    # Parsing: split by newline, strip whitespace, remove empty/invalid lines
+                    new_hosts = [line.strip() for line in text.splitlines() if line.strip()]
+                    
+                    if new_hosts:
+                        self.iframe_hosts = new_hosts
+                        logger.info(f"✅ Lista host aggiornata: {self.iframe_hosts}")
+                        self._save_cache()
+                        return True
+                    else:
+                         logger.warning("⚠️ Lista host scaricata ma vuota.")
+                else:
+                    logger.error(f"❌ Errore HTTP {response.status} durante aggiornamento host iframe.")
+        except Exception as e:
+            logger.error(f"❌ Eccezione durante aggiornamento host iframe: {e}")
+        
+        return False
 
     def _get_headers_for_url(self, url: str, base_headers: dict) -> dict:
         """Applica headers specifici per newkso.ru automaticamente"""
@@ -229,32 +287,13 @@ class DLHDExtractor:
     async def extract(self, url: str, force_refresh: bool = False, **kwargs) -> Dict[str, Any]:
         """Flusso di estrazione principale: estrae direttamente dall'iframe."""
         
-        # Usa la lista di host configurata nell'istanza (aggiornabile dinamicamente)
-        iframe_hosts = self.iframe_hosts
-
-        def extract_channel_id(u: str) -> Optional[str]:
-            patterns = [
-                r'/premium(\d+)/mono',
-                r'/(?:watch|stream|cast|player)/stream-(\d+)\.php',
-                r'watch\.php\?id=(\d+)',
-                r'(?:%2F|/)stream-(\d+)\.php',
-                r'stream-(\d+)\.php',
-                r'[?&]id=(\d+)',
-                r'daddyhd\.php\?id=(\d+)',
-            ]
-            for pattern in patterns:
-                match = re.search(pattern, u, re.IGNORECASE)
-                if match:
-                    return match.group(1)
-            return None
-
-        async def get_stream_data_direct(channel_id: str) -> Dict[str, Any]:
+        async def get_stream_data_direct(channel_id: str, hosts_to_try: list) -> Dict[str, Any]:
             """Estrazione diretta dall'iframe senza passare per la pagina principale."""
             
             user_agent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36'
             
             last_error = None
-            for iframe_host in iframe_hosts:
+            for iframe_host in hosts_to_try:
                 try:
                     iframe_url = f'https://{iframe_host}/premiumtv/daddyhd.php?id={channel_id}'
                     logger.info(f"🔍 Tentativo estrazione da: {iframe_url}")
@@ -385,11 +424,32 @@ class DLHDExtractor:
                         'Authorization': f'Bearer {auth_token}',
                         'X-Channel-Key': channel_key,
                     }
+
+                    # ✅ Aggiungi cookies dalla sessione corrente
+                    if self.session:
+                        # Log all cookies for debugging
+                        all_cookies = list(self.session.cookie_jar)
+                        logger.info(f"🍪 All cookies in jar: {all_cookies}")
+                        
+                        cookies = self.session.cookie_jar.filter_cookies(stream_url)
+                        cookie_str = "; ".join([f"{k}={v.value}" for k, v in cookies.items()])
+                        if cookie_str:
+                            stream_headers['Cookie'] = cookie_str
+                            logger.info(f"🍪 Cookies aggiunti agli headers: {cookie_str[:50]}...")
+
+                    expires_at = None
+                    try:
+                        if params.get('auth_expiry'):
+                            expires_at = float(params['auth_expiry'])
+                            logger.info(f"⏳ Auth Expiry: {expires_at} (Current time: {time.time()})")
+                    except (ValueError, TypeError):
+                        pass
                     
                     return {
                         "destination_url": stream_url,
                         "request_headers": stream_headers,
                         "mediaflow_endpoint": self.mediaflow_endpoint,
+                        "expires_at": expires_at
                     }
                     
                 except Exception as e:
@@ -398,6 +458,23 @@ class DLHDExtractor:
                     continue
             
             raise ExtractorError(f"Tutti gli host iframe hanno fallito. Ultimo errore: {last_error}")
+
+        # Helper per estrarre ID (spostato fuori per pulizia scope)
+        def extract_channel_id(u: str) -> Optional[str]:
+            patterns = [
+                r'/premium(\d+)/mono',
+                r'/(?:watch|stream|cast|player)/stream-(\d+)\.php',
+                r'watch\.php\?id=(\d+)',
+                r'(?:%2F|/)stream-(\d+)\.php',
+                r'stream-(\d+)\.php',
+                r'[?&]id=(\d+)',
+                r'daddyhd\.php\?id=(\d+)',
+            ]
+            for pattern in patterns:
+                match = re.search(pattern, u, re.IGNORECASE)
+                if match:
+                    return match.group(1)
+            return None
 
         try:
             channel_id = extract_channel_id(url)
@@ -412,9 +489,15 @@ class DLHDExtractor:
                 cached_data = self._stream_data_cache[channel_id]
                 stream_url = cached_data.get("destination_url")
                 stream_headers = cached_data.get("request_headers", {})
+                expires_at = cached_data.get("expires_at")
 
                 is_valid = False
-                if stream_url:
+                
+                # ✅ Check expiry first (con buffer di 30 secondi)
+                if expires_at and time.time() > (expires_at - 30):
+                     logger.warning(f"⚠️ Cache scaduta per il canale ID {channel_id} (expires_at: {expires_at}).")
+                     is_valid = False
+                elif stream_url:
                     try:
                         async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as validation_session:
                             async with validation_session.head(stream_url, headers=stream_headers, ssl=False) as response:
@@ -442,12 +525,30 @@ class DLHDExtractor:
             async with lock:
                 # Ricontrolla la cache dopo aver acquisito il lock
                 if not force_refresh and channel_id in self._stream_data_cache:
-                    logger.info(f"✅ Dati per il canale {channel_id} trovati in cache dopo aver atteso il lock.")
-                    return self._stream_data_cache[channel_id]
+                    cached_data = self._stream_data_cache[channel_id]
+                    expires_at = cached_data.get("expires_at")
+                    
+                    # Se è scaduta anche la nuova cache (improbabile ma possibile), procedi con estrazione
+                    if expires_at and time.time() > (expires_at - 30):
+                        logger.info(f"⚠️ Cache (ricontrollata) scaduta per {channel_id}, procedo con nuova estrazione.")
+                    else:
+                        logger.info(f"✅ Dati per il canale {channel_id} trovati in cache dopo aver atteso il lock.")
+                        return self._stream_data_cache[channel_id]
 
                 # Procedi con l'estrazione diretta
+                # Procedi con l'estrazione diretta
                 logger.info(f"⚙️ Nessuna cache valida per {channel_id}, avvio estrazione diretta...")
-                result = await get_stream_data_direct(channel_id)
+                
+                try:
+                    result = await get_stream_data_direct(channel_id, self.iframe_hosts)
+                except ExtractorError:
+                    # Se fallisce con gli host correnti, prova ad aggiornarli
+                    logger.warning("⚠️ Tutti gli host correnti hanno fallito. Tento aggiornamento lista host...")
+                    if await self._fetch_iframe_hosts():
+                         logger.info(f"🔄 Riprovo con nuovi host: {self.iframe_hosts}")
+                         result = await get_stream_data_direct(channel_id, self.iframe_hosts)
+                    else:
+                        raise
                 
                 # Salva in cache
                 self._stream_data_cache[channel_id] = result

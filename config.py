@@ -116,6 +116,13 @@ if TRANSPORT_ROUTES: logging.info(f"🚦 Caricate {len(TRANSPORT_ROUTES)} regole
 API_PASSWORD = os.environ.get("API_PASSWORD")
 PORT = int(os.environ.get("PORT", 7860))
 
+# MPD Processing Mode: 'ffmpeg' (transcoding) or 'legacy' (mpd_converter)
+MPD_MODE = os.environ.get("MPD_MODE", "legacy").lower()
+if MPD_MODE not in ("ffmpeg", "legacy"):
+    logging.warning(f"⚠️ MPD_MODE '{MPD_MODE}' non valido. Uso 'legacy' come default.")
+    MPD_MODE = "legacy"
+logging.info(f"🎬 MPD Mode: {MPD_MODE}")
+
 def check_password(request):
     """Verifica la password API se impostata."""
     if not API_PASSWORD:

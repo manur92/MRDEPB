@@ -14,11 +14,22 @@ import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout, TCPConnector, ClientPayloadError, ServerDisconnectedError, ClientConnectionError
 from aiohttp_proxy import ProxyConnector
 
-from config import GLOBAL_PROXIES, TRANSPORT_ROUTES, get_proxy_for_url, get_ssl_setting_for_url, API_PASSWORD, check_password
+from config import GLOBAL_PROXIES, TRANSPORT_ROUTES, get_proxy_for_url, get_ssl_setting_for_url, API_PASSWORD, check_password, MPD_MODE
 from extractors.generic import GenericHLSExtractor, ExtractorError
-from utils.mpd_converter import MPDToHLSConverter
-from utils.drm_decrypter import decrypt_segment
 from services.manifest_rewriter import ManifestRewriter
+
+# Legacy MPD converter (used when MPD_MODE=legacy)
+MPDToHLSConverter = None
+decrypt_segment = None
+if MPD_MODE == "legacy":
+    try:
+        from utils.mpd_converter import MPDToHLSConverter
+        from utils.drm_decrypter import decrypt_segment
+        logger = logging.getLogger(__name__)
+        logger.info("✅ Moduli legacy MPD caricati (mpd_converter, drm_decrypter)")
+    except ImportError as e:
+        logger = logging.getLogger(__name__)
+        logger.warning(f"⚠️ MPD_MODE=legacy ma moduli non trovati: {e}")
 
 # --- Moduli Esterni ---
 VavooExtractor, DLHDExtractor, VixSrcExtractor, PlaylistBuilder, SportsonlineExtractor = None, None, None, None, None
@@ -90,8 +101,9 @@ except ImportError:
 class HLSProxy:
     """Proxy HLS per gestire stream Vavoo, DLHD, HLS generici e playlist builder con supporto AES-128"""
     
-    def __init__(self):
+    def __init__(self, ffmpeg_manager=None):
         self.extractors = {}
+        self.ffmpeg_manager = ffmpeg_manager
         
         # Inizializza il playlist_builder se il modulo è disponibile
         if PlaylistBuilder:
@@ -99,19 +111,33 @@ class HLSProxy:
             logger.info("✅ PlaylistBuilder inizializzato")
         else:
             self.playlist_builder = None
-            
-        # Inizializza il convertitore MPD -> HLS
-        self.mpd_converter = MPDToHLSConverter()
         
         # Cache per segmenti di inizializzazione (URL -> content)
         self.init_cache = {}
+        
+        # Cache per segmenti decriptati (URL -> (content, timestamp))
+        self.segment_cache = {}
+        self.segment_cache_ttl = 30  # Seconds
+        
+        # Prefetch queue for background downloading
+        self.prefetch_tasks = set()
         
         # Sessione condivisa per il proxy
         self.session = None
 
     async def _get_session(self):
         if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession(timeout=ClientTimeout(total=30))
+            # Optimized connector with larger pool for concurrent segment downloads
+            connector = TCPConnector(
+                limit=100,  # Max total connections
+                limit_per_host=30,  # Max per host
+                keepalive_timeout=60,  # Keep connections alive longer
+                enable_cleanup_closed=True
+            )
+            self.session = aiohttp.ClientSession(
+                timeout=ClientTimeout(total=30),
+                connector=connector
+            )
         return self.session
 
     async def get_extractor(self, url: str, request_headers: dict, host: str = None):
@@ -304,20 +330,137 @@ class HLSProxy:
                     return web.json_response(response_data)
 
                 # Aggiungi headers personalizzati da query params
+                h_params_found = []
                 for param_name, param_value in request.query.items():
                     if param_name.startswith('h_'):
                         header_name = param_name[2:]
+                        h_params_found.append(header_name)
                         
                         # ✅ FIX: Rimuovi eventuali header duplicati (case-insensitive) presenti in stream_headers
                         # Questo assicura che l'header passato via query param (es. h_Referer) abbia la priorità
                         # e non vada in conflitto con quelli generati dagli estrattori (es. referer minuscolo).
-                        for k in list(stream_headers.keys()):
-                            if k.lower() == header_name.lower():
-                                del stream_headers[k]
+                        keys_to_remove = [k for k in stream_headers.keys() if k.lower() == header_name.lower()]
+                        for k in keys_to_remove:
+                            del stream_headers[k]
                         
                         stream_headers[header_name] = param_value
                 
+                if h_params_found:
+                    logger.debug(f"   Headers overridden by query params: {h_params_found}")
+                else:
+                    logger.debug("   No h_ params found in query string.")
+                    
                 # Stream URL resolved
+                # ✅ MPD/DASH handling based on MPD_MODE
+                if ".mpd" in stream_url or "dash" in stream_url.lower():
+                    if MPD_MODE == "ffmpeg" and self.ffmpeg_manager:
+                        # FFmpeg transcoding mode
+                        logger.info(f"🔄 [FFmpeg Mode] Routing MPD stream: {stream_url}")
+                        
+                        # Extract ClearKey if present
+                        clearkey_param = request.query.get('clearkey')
+                        
+                        # Support separate key_id and key params
+                        if not clearkey_param:
+                            key_id = request.query.get('key_id')
+                            key_val = request.query.get('key')
+                            if key_id and key_val:
+                                clearkey_param = f"{key_id}:{key_val}"
+                            elif key_val:
+                                clearkey_param = key_val
+                        
+                        playlist_rel_path = await self.ffmpeg_manager.get_stream(stream_url, stream_headers, clearkey=clearkey_param)
+                        
+                        if playlist_rel_path:
+                            # Construct local URL for the FFmpeg stream
+                            scheme = request.headers.get('X-Forwarded-Proto', request.scheme)
+                            host = request.headers.get('X-Forwarded-Host', request.host)
+                            local_url = f"{scheme}://{host}/ffmpeg_stream/{playlist_rel_path}"
+                            
+                            # Generate Master Playlist for compatibility
+                            master_playlist = (
+                                "#EXTM3U\n"
+                                "#EXT-X-VERSION:3\n"
+                                "#EXT-X-STREAM-INF:BANDWIDTH=6000000,NAME=\"Live\"\n"
+                                f"{local_url}\n"
+                            )
+                            
+                            return web.Response(
+                                text=master_playlist,
+                                content_type="application/vnd.apple.mpegurl",
+                                headers={
+                                    "Access-Control-Allow-Origin": "*",
+                                    "Cache-Control": "no-cache"
+                                }
+                            )
+                        else:
+                            logger.error("❌ FFmpeg failed to start")
+                            return web.Response(text="FFmpeg failed to process stream", status=502)
+                    else:
+                        # Legacy mode: use mpd_converter for HLS conversion with server-side decryption
+                        logger.info(f"🔄 [Legacy Mode] Converting MPD to HLS: {stream_url}")
+                        
+                        if MPDToHLSConverter is None:
+                            logger.error("❌ MPDToHLSConverter not available in legacy mode")
+                            return web.Response(text="Legacy MPD converter not available", status=503)
+                        
+                        # Fetch the MPD manifest
+                        session = await self._get_session()
+                        async with session.get(stream_url, headers=stream_headers) as resp:
+                            if resp.status != 200:
+                                return web.Response(text=f"Failed to fetch MPD: {resp.status}", status=502)
+                            manifest_content = await resp.text()
+                        
+                        # Build proxy base URL
+                        scheme = request.headers.get('X-Forwarded-Proto', request.scheme)
+                        host = request.headers.get('X-Forwarded-Host', request.host)
+                        proxy_base = f"{scheme}://{host}"
+                        
+                        # Build params string with headers
+                        params = "".join([f"&h_{urllib.parse.quote(key)}={urllib.parse.quote(value)}" for key, value in stream_headers.items()])
+                        
+                        # Add api_password if present
+                        api_password = request.query.get('api_password')
+                        if api_password:
+                            params += f"&api_password={api_password}"
+                        
+                        # Get ClearKey param
+                        clearkey_param = request.query.get('clearkey')
+                        if not clearkey_param:
+                            key_id = request.query.get('key_id')
+                            key_val = request.query.get('key')
+                            if key_id and key_val:
+                                clearkey_param = f"{key_id}:{key_val}"
+                            elif key_val:
+                                clearkey_param = key_val
+                        
+                        if clearkey_param:
+                            params += f"&clearkey={clearkey_param}"
+                        
+                        # Check if requesting specific representation
+                        rep_id = request.query.get('rep_id')
+                        
+                        converter = MPDToHLSConverter()
+                        if rep_id:
+                            # Generate media playlist for specific representation
+                            hls_content = converter.convert_media_playlist(
+                                manifest_content, rep_id, proxy_base, stream_url, params, clearkey_param
+                            )
+                        else:
+                            # Generate master playlist
+                            hls_content = converter.convert_master_playlist(
+                                manifest_content, proxy_base, stream_url, params
+                            )
+                        
+                        return web.Response(
+                            text=hls_content,
+                            content_type="application/vnd.apple.mpegurl",
+                            headers={
+                                "Access-Control-Allow-Origin": "*",
+                                "Cache-Control": "no-cache"
+                            }
+                        )
+                
                 return await self._proxy_stream(request, stream_url, stream_headers)
             except ExtractorError as e:
                 logger.warning(f"Estrazione fallita, tento di nuovo forzando l'aggiornamento: {e}")
@@ -770,6 +913,15 @@ class HLSProxy:
                     headers['Origin'] = headers.pop(key)
                 elif key.lower() == 'authorization':
                     headers['Authorization'] = headers.pop(key)
+                elif key.lower() == 'cookie':
+                    headers['Cookie'] = headers.pop(key)
+
+            # ✅ FIX: Rimuovi duplicati espliciti se presenti (es. user-agent e User-Agent)
+            # Questo può accadere se GenericHLSExtractor aggiunge 'user-agent' e noi abbiamo 'User-Agent' da h_ params
+            # La normalizzazione sopra dovrebbe averli unificati, ma per sicurezza puliamo.
+            
+            # Log headers finali per debug
+            # logger.info(f"   Final Stream Headers: {headers}")
 
             # ✅ NUOVO: Determina se disabilitare SSL per questo dominio
             disable_ssl = get_ssl_setting_for_url(stream_url, TRANSPORT_ROUTES)
@@ -780,6 +932,18 @@ class HLSProxy:
                     content_type = resp.headers.get('content-type', '')
                     
                     print(f"   Upstream Response: {resp.status} [{content_type}]")
+
+                    # ✅ FIX: Se la risposta non è OK, restituisci direttamente l'errore senza processare
+                    if resp.status not in [200, 206]:
+                        logger.warning(f"⚠️ Upstream returned error {resp.status} for {stream_url}")
+                        return web.Response(
+                            body=await resp.read(),
+                            status=resp.status,
+                            headers={
+                                'Content-Type': content_type,
+                                'Access-Control-Allow-Origin': '*'
+                            }
+                        )
                     
                     # Gestione special per manifest HLS
                     # ✅ CORREZIONE: Gestisce anche i manifest mascherati da .css (usati da DLHD)
@@ -826,53 +990,47 @@ class HLSProxy:
                             if key_id and key:
                                 clearkey_param = f"{key_id}:{key}"
 
+                        # --- LEGACY MODE: MPD -> HLS Conversion ---
+                        if MPD_MODE == "legacy" and MPDToHLSConverter:
+                            logger.info(f"🔄 [Legacy Mode] Converting MPD to HLS for {stream_url}")
+                            try:
+                                converter = MPDToHLSConverter()
+                                
+                                # Check if requesting a Media Playlist (Variant)
+                                rep_id = request.query.get('rep_id')
+                                
+                                if rep_id:
+                                    # Generate Media Playlist (Segments)
+                                    hls_playlist = converter.convert_media_playlist(
+                                        manifest_content, rep_id, proxy_base, stream_url, request.query_string, clearkey_param
+                                    )
+                                    # Log first few lines for debugging
+                                    logger.info(f"📜 Generated Media Playlist for {rep_id} (first 10 lines):\n{chr(10).join(hls_playlist.splitlines()[:10])}")
+                                else:
+                                    # Generate Master Playlist
+                                    hls_playlist = converter.convert_master_playlist(
+                                        manifest_content, proxy_base, stream_url, request.query_string
+                                    )
+                                    logger.info(f"📜 Generated Master Playlist (first 5 lines):\n{chr(10).join(hls_playlist.splitlines()[:5])}")
+                                
+                                return web.Response(
+                                    text=hls_playlist,
+                                    headers={
+                                        'Content-Type': 'application/vnd.apple.mpegurl',
+                                        'Content-Disposition': 'attachment; filename="stream.m3u8"',
+                                        'Access-Control-Allow-Origin': '*',
+                                        'Cache-Control': 'no-cache'
+                                    }
+                                )
+                            except Exception as e:
+                                logger.error(f"❌ Legacy conversion failed: {e}")
+                                # Fallback to DASH proxy if conversion fails
+                                pass
+
+                        # --- DEFAULT: DASH Proxy (Rewriting) ---
                         req_format = request.query.get('format')
                         rep_id = request.query.get('rep_id')
-                        
-                        # --- CONVERSIONE MPD -> HLS ---
-                        if req_format == 'hls' or (request.path.endswith('.m3u8') and req_format != 'mpd'):
-                            
-                            # Costruiamo i parametri da passare ai sottolink
-                            params = "".join([f"&h_{urllib.parse.quote(key)}={urllib.parse.quote(value)}" for key, value in stream_headers.items()])
-                            
-                            # ✅ FIX: Propagate api_password
-                            api_password = request.query.get('api_password')
-                            if api_password:
-                                params += f"&api_password={api_password}"
 
-                            if clearkey_param:
-                                params += f"&clearkey={clearkey_param}"
-                            
-                            if rep_id:
-                                # Genera Media Playlist per la variante specifica
-                                hls_content = self.mpd_converter.convert_media_playlist(
-                                    manifest_content, rep_id, proxy_base, stream_url, params, clearkey_param
-                                )
-                                return web.Response(
-                                    text=hls_content,
-                                    headers={
-                                        'Content-Type': 'application/vnd.apple.mpegurl',
-                                        'Content-Disposition': 'attachment; filename="playlist.m3u8"',
-                                        'Access-Control-Allow-Origin': '*',
-                                        'Cache-Control': 'no-cache'
-                                    }
-                                )
-                            else:
-                                # Genera Master Playlist
-                                hls_content = self.mpd_converter.convert_master_playlist(
-                                    manifest_content, proxy_base, stream_url, params
-                                )
-                                return web.Response(
-                                    text=hls_content,
-                                    headers={
-                                        'Content-Type': 'application/vnd.apple.mpegurl',
-                                        'Content-Disposition': 'attachment; filename="master.m3u8"',
-                                        'Access-Control-Allow-Origin': '*',
-                                        'Cache-Control': 'no-cache'
-                                    }
-                                )
-
-                        # --- MPD REWRITING (DASH NATIVO) ---
                         api_password = request.query.get('api_password')
                         rewritten_manifest = ManifestRewriter.rewrite_mpd_manifest(manifest_content, stream_url, proxy_base, headers, clearkey_param, api_password)
                         
@@ -1087,12 +1245,138 @@ class HLSProxy:
         }
         return web.json_response(info)
 
+    def _prefetch_next_segments(self, current_url, init_url, key, key_id, headers):
+        """Identifica i prossimi segmenti e avvia il download in background."""
+        try:
+            parsed = urllib.parse.urlparse(current_url)
+            path = parsed.path
+            
+            # Cerca pattern numerico alla fine del path (es. segment-1.m4s)
+            match = re.search(r'([-_])(\d+)(\.[^.]+)$', path)
+            if not match:
+                return
+
+            separator, current_number, extension = match.groups()
+            current_num = int(current_number)
+
+            # Prefetch next 3 segments
+            for i in range(1, 4):
+                next_num = current_num + i
+                
+                # Replace number in path
+                pattern = f"{separator}{current_number}{re.escape(extension)}$"
+                replacement = f"{separator}{next_num}{extension}"
+                new_path = re.sub(pattern, replacement, path)
+                
+                # Reconstruct URL
+                next_url = urllib.parse.urlunparse(parsed._replace(path=new_path))
+                
+                cache_key = f"{next_url}:{key_id}"
+                
+                if (cache_key not in self.segment_cache and 
+                    cache_key not in self.prefetch_tasks):
+                    
+                    self.prefetch_tasks.add(cache_key)
+                    asyncio.create_task(
+                        self._fetch_and_cache_segment(next_url, init_url, key, key_id, headers, cache_key)
+                    )
+
+        except Exception as e:
+            logger.warning(f"⚠️ Prefetch error: {e}")
+
+    async def _fetch_and_cache_segment(self, url, init_url, key, key_id, headers, cache_key):
+        """Scarica, decripta e mette in cache un segmento in background."""
+        try:
+            if decrypt_segment is None:
+                return
+
+            session = await self._get_session()
+            
+            # Download Init (usa cache se possibile)
+            init_content = b""
+            if init_url:
+                if init_url in self.init_cache:
+                    init_content = self.init_cache[init_url]
+                else:
+                    disable_ssl = get_ssl_setting_for_url(init_url, TRANSPORT_ROUTES)
+                    try:
+                        async with session.get(init_url, headers=headers, ssl=not disable_ssl, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                            if resp.status == 200:
+                                init_content = await resp.read()
+                                self.init_cache[init_url] = init_content
+                    except Exception:
+                        pass 
+
+            # Download Segment
+            segment_content = None
+            disable_ssl = get_ssl_setting_for_url(url, TRANSPORT_ROUTES)
+            try:
+                async with session.get(url, headers=headers, ssl=not disable_ssl, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status == 200:
+                        segment_content = await resp.read()
+            except Exception:
+                pass
+
+            if segment_content:
+                # Decrypt
+                decrypted_content = decrypt_segment(init_content, segment_content, key_id, key)
+                import time
+                self.segment_cache[cache_key] = (decrypted_content, time.time())
+                logger.info(f"📦 Prefetched segment: {url.split('/')[-1]}")
+
+        except Exception as e:
+            pass
+        finally:
+            if cache_key in self.prefetch_tasks:
+                self.prefetch_tasks.remove(cache_key)
+
+    async def _remux_to_ts(self, content):
+        """Converte segmenti (fMP4) in MPEG-TS usando FFmpeg pipe."""
+        try:
+            cmd = [
+                'ffmpeg',
+                '-y',
+                '-i', 'pipe:0',
+                '-c', 'copy',
+                '-copyts',                      # Preserve timestamps to prevent freezing/gap issues
+                '-bsf:v', 'h264_mp4toannexb',   # Ensure video is Annex B (MPEG-TS requirement)
+                '-bsf:a', 'aac_adtstoasc',      # Ensure audio is ADTS (MPEG-TS requirement)
+                '-f', 'mpegts',
+                'pipe:1'
+            ]
+            
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await proc.communicate(input=content)
+            
+            # Check for data presence regardless of return code (workaround for asyncio race condition on some platforms)
+            if len(stdout) > 0:
+                if proc.returncode != 0:
+                    logger.warning(f"⚠️ FFmpeg remux finished with code {proc.returncode} but produced output (ignoring error). Stderr: {stderr.decode()[:200]}")
+                return stdout
+            
+            if proc.returncode != 0:
+                logger.error(f"❌ FFmpeg remux failed: {stderr.decode()}")
+                return None
+                
+            return stdout
+        except Exception as e:
+            logger.error(f"❌ Remux error: {e}")
+            return None
+
     async def handle_decrypt_segment(self, request):
-        """✅ Decritta segmenti fMP4 lato server usando Python (PyCryptodome)."""
+        """Decripta segmenti fMP4 lato server per ClearKey (legacy mode)."""
         if not check_password(request):
             return web.Response(status=401, text="Unauthorized: Invalid API Password")
 
         url = request.query.get('url')
+        logger.info(f"🔓 Decrypt Request: {url.split('/')[-1] if url else 'unknown'}")
+
         init_url = request.query.get('init_url')
         key = request.query.get('key')
         key_id = request.query.get('key_id')
@@ -1100,9 +1384,35 @@ class HLSProxy:
         if not url or not key or not key_id:
             return web.Response(text="Missing url, key, or key_id", status=400)
 
+        if decrypt_segment is None:
+            return web.Response(text="Decrypt not available (MPD_MODE is not legacy)", status=503)
+
+        # Check cache first
+        import time
+        cache_key = f"{url}:{key_id}:ts" # Use distinct cache key for TS
+        if cache_key in self.segment_cache:
+            cached_content, cached_time = self.segment_cache[cache_key]
+            if time.time() - cached_time < self.segment_cache_ttl:
+                logger.info(f"📦 Cache HIT for segment: {url.split('/')[-1]}")
+                return web.Response(
+                    body=cached_content,
+                    status=200,
+                    headers={
+                        'Content-Type': 'video/MP2T',
+                        'Access-Control-Allow-Origin': '*',
+                        'Cache-Control': 'no-cache',
+                        'Connection': 'keep-alive'
+                    }
+                )
+            else:
+                del self.segment_cache[cache_key]
+
         try:
             # Ricostruisce gli headers per le richieste upstream
-            headers = {}
+            headers = {
+                'Connection': 'keep-alive',
+                'Accept-Encoding': 'identity'
+            }
             for param_name, param_value in request.query.items():
                 if param_name.startswith('h_'):
                     header_name = param_name[2:].replace('_', '-')
@@ -1110,46 +1420,87 @@ class HLSProxy:
 
             session = await self._get_session()
 
-            # --- 1. Scarica Initialization Segment (con cache) ---
-            init_content = b""
-            if init_url:
+            # Parallel download of init and media segment
+            async def fetch_init():
+                if not init_url:
+                    return b""
                 if init_url in self.init_cache:
-                    init_content = self.init_cache[init_url]
-                else:
-                    # ✅ NUOVO: Determina se disabilitare SSL per questo dominio
-                    disable_ssl_init = get_ssl_setting_for_url(init_url, TRANSPORT_ROUTES)
-                    async with session.get(init_url, headers=headers, ssl=not disable_ssl_init) as resp:
-                        if resp.status == 200:
-                            init_content = await resp.read()
-                            self.init_cache[init_url] = init_content
-                        else:
-                            logger.error(f"❌ Failed to fetch init segment: {resp.status}")
-                            return web.Response(status=502)
+                    return self.init_cache[init_url]
+                disable_ssl = get_ssl_setting_for_url(init_url, TRANSPORT_ROUTES)
+                async with session.get(init_url, headers=headers, ssl=not disable_ssl, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        content = await resp.read()
+                        self.init_cache[init_url] = content
+                        return content
+                    return None
 
-            # --- 2. Scarica Media Segment ---
-            # ✅ NUOVO: Determina se disabilitare SSL per questo dominio
-            disable_ssl_media = get_ssl_setting_for_url(url, TRANSPORT_ROUTES)
-            async with session.get(url, headers=headers, ssl=not disable_ssl_media) as resp:
-                if resp.status != 200:
-                    logger.error(f"❌ Failed to fetch segment: {resp.status}")
-                    return web.Response(status=502)
-                
-                segment_content = await resp.read()
+            async def fetch_segment():
+                disable_ssl = get_ssl_setting_for_url(url, TRANSPORT_ROUTES)
+                async with session.get(url, headers=headers, ssl=not disable_ssl, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status == 200:
+                        return await resp.read()
+                    return None
 
-            # --- 3. Decritta con Python (PyCryptodome) ---
-            decrypted_content = decrypt_segment(init_content, segment_content, key_id, key)
+            # Parallel fetch
+            init_content, segment_content = await asyncio.gather(fetch_init(), fetch_segment())
+            
+            if init_content is None and init_url:
+                logger.error(f"❌ Failed to fetch init segment")
+                return web.Response(status=502)
+            if segment_content is None:
+                logger.error(f"❌ Failed to fetch segment")
+                return web.Response(status=502)
 
-            # --- 4. Invia Risposta ---
+            init_content = init_content or b""
+
+            # Check if we should skip decryption (null key case)
+            skip_decrypt = request.query.get('skip_decrypt') == '1'
+            
+            if skip_decrypt:
+                # Null key: just concatenate init + segment without decryption
+                logger.info(f"🔓 Skip decrypt mode - remuxing without decryption")
+                combined_content = init_content + segment_content
+            else:
+                # Decripta con PyCryptodome
+                combined_content = decrypt_segment(init_content, segment_content, key_id, key)
+
+            # Leggero REMUX to TS
+            ts_content = await self._remux_to_ts(combined_content)
+            if not ts_content:
+                 logger.warning("⚠️ Remux failed, serving raw fMP4")
+                 # Fallback: serve fMP4 if remux fails
+                 ts_content = combined_content
+                 content_type = 'video/mp4'
+            else:
+                 content_type = 'video/MP2T'
+                 logger.info("⚡ Remuxed fMP4 -> TS")
+
+            # Store in cache
+            self.segment_cache[cache_key] = (ts_content, time.time())
+            
+            # Clean old cache entries (keep max 50)
+            if len(self.segment_cache) > 50:
+                oldest_keys = sorted(self.segment_cache.keys(), key=lambda k: self.segment_cache[k][1])[:20]
+                for k in oldest_keys:
+                    del self.segment_cache[k]
+
+            # Prefetch next segments in background
+            self._prefetch_next_segments(url, init_url, key, key_id, headers)
+
+            # Invia Risposta
             return web.Response(
-                body=decrypted_content,
+                body=ts_content,
                 status=200,
-                headers={'Content-Type': 'video/mp4', 'Access-Control-Allow-Origin': '*'}
+                headers={
+                    'Content-Type': content_type,
+                    'Access-Control-Allow-Origin': '*',
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive'
+                }
             )
 
         except Exception as e:
             logger.error(f"❌ Decryption error: {e}")
-            import traceback
-            traceback.print_exc()
             return web.Response(status=500, text=f"Decryption failed: {str(e)}")
 
     async def handle_generate_urls(self, request):

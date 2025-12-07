@@ -8,7 +8,24 @@ services:
     environment:
       - API_PASSWORD=ep      #qui inserisci la tua password personalizzata
       - PORT=7860
+      
+      # Scegli come gestire gli stream MPD/DASH:
+      # - ffmpeg: Transcoding via FFmpeg (richiede FFmpeg installato, alta CPU ma sync A/V migliore)
+      # - legacy: Usa mpd_converter + drm_decrypter (più leggero ma possibili problemi di compatibilità)
+      #- MPD_MODE=legacy
+      
       # VARIABILI OPZIONALI
+      
+      # --- Proxy Globale ---
+      # Usato per tutte le richieste che non hanno una regola specifica in TRANSPORT_ROUTES.
+      # Esempio: GLOBAL_PROXY=http://myproxy.com:8080
       #- GLOBAL_PROXY=
-      #- VAVOO_PROXY=
-      #- DLHD_PROXY=
+      
+      # --- Regole di Trasporto (TRANSPORT_ROUTES) ---
+      # Sistema avanzato per routing proxy basato su URL patterns.
+      # Formato: {URL=pattern, PROXY=proxy_url, DISABLE_SSL=true}, {URL=pattern2, PROXY=proxy_url2, DISABLE_SSL=true}
+      # - URL: pattern da cercare nell'URL (es. vavoo.to, dlhd.dad, giokko.ru)
+      # - PROXY: proxy da usare (lascia vuoto per connessione diretta)
+      # - DISABLE_SSL: per disattivare la verifica ssl
+      
+      #- TRANSPORT_ROUTES={URL=vavoo.to, PROXY=socks5://proxy1:1080, DISABLE_SSL=true}, {URL=dlhd.dad, PROXY=http://proxy2:8080, DISABLE_SSL=true}

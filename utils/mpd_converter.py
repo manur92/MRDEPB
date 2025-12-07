@@ -14,6 +14,29 @@ class MPDToHLSConverter:
             'mpd': 'urn:mpeg:dash:schema:mpd:2011',
             'cenc': 'urn:mpeg:cenc:2013'
         }
+    
+    def _extract_header_params(self, params: str) -> str:
+        """Estrae solo i parametri necessari dalla query string originale.
+        
+        Estrae:
+        - h_* (headers personalizzati)
+        - api_password (autenticazione)
+        - clearkey (chiavi DRM)
+        
+        Questo evita di passare parametri di controllo duplicati (d=, rep_id=, format=, etc.)
+        che possono causare problemi di parsing degli URL.
+        """
+        if not params:
+            return ""
+        
+        header_params = []
+        for param in params.split('&'):
+            if param.startswith('h_') or param.startswith('api_password=') or param.startswith('clearkey='):
+                header_params.append(param)
+        
+        if header_params:
+            return '&' + '&'.join(header_params)
+        return ""
 
     def convert_master_playlist(self, manifest_content: str, proxy_base: str, original_url: str, params: str) -> str:
         """Genera la Master Playlist HLS dagli AdaptationSet del MPD."""
@@ -56,7 +79,8 @@ class MPDToHLSConverter:
                     
                     # Costruisci URL Media Playlist Audio
                     encoded_url = urllib.parse.quote(original_url, safe='')
-                    media_url = f"{proxy_base}/proxy/hls/manifest.m3u8?d={encoded_url}&format=hls&rep_id={rep_id}{params}"
+                    header_params = self._extract_header_params(params)
+                    media_url = f"{proxy_base}/proxy/hls/manifest.m3u8?d={encoded_url}&format=hls&rep_id={rep_id}{header_params}"
                     
                     # Usa GROUP-ID 'audio' e NAME basato su ID o lingua
                     lang = adaptation_set.get('lang', 'und')
@@ -70,8 +94,23 @@ class MPDToHLSConverter:
                     has_audio = True
 
             # --- GESTIONE VIDEO (EXT-X-STREAM-INF) ---
+            # Calcola max height per forzare qualità massima (fix iOS/Stremio)
+            max_height = 0
+            for adaptation_set in video_sets:
+                for rep in adaptation_set.findall('mpd:Representation', self.ns):
+                    try:
+                        h = int(rep.get("height", 0))
+                        if h > max_height: max_height = h
+                    except: pass
+
             for adaptation_set in video_sets:
                 for representation in adaptation_set.findall('mpd:Representation', self.ns):
+                    # Filtra risoluzioni basse
+                    try:
+                        curr_h = int(representation.get("height", 0))
+                        if curr_h < max_height: continue
+                    except: pass
+
                     rep_id = representation.get('id')
                     bandwidth = representation.get('bandwidth')
                     width = representation.get('width')
@@ -80,7 +119,8 @@ class MPDToHLSConverter:
                     codecs = representation.get('codecs')
                     
                     encoded_url = urllib.parse.quote(original_url, safe='')
-                    media_url = f"{proxy_base}/proxy/hls/manifest.m3u8?d={encoded_url}&format=hls&rep_id={rep_id}{params}"
+                    header_params = self._extract_header_params(params)
+                    media_url = f"{proxy_base}/proxy/hls/manifest.m3u8?d={encoded_url}&format=hls&rep_id={rep_id}{header_params}"
                     
                     inf = f'#EXT-X-STREAM-INF:BANDWIDTH={bandwidth}'
                     if width and height:
@@ -130,14 +170,14 @@ class MPDToHLSConverter:
                 logger.error(f"❌ Representation {rep_id} non trovata nel manifest.")
                 return "#EXTM3U\n#EXT-X-ERROR: Representation not found"
 
-            # fMP4 richiede HLS versione 6 o 7
-            # Per LIVE: non usare VOD e forza partenza dal live edge
+            # fMP4 richiede HLS versione 6 o 7, ma per .ts output usiamo v3 per compatibilità
+            # Per LIVE: non usare VOD e non aggiungere ENDLIST
             if is_live:
-                lines = ['#EXTM3U', '#EXT-X-VERSION:7']
-                # Forza il player a partire dal live edge (fine della playlist)
-                lines.append('#EXT-X-START:TIME-OFFSET=-3.0,PRECISE=YES')
+                lines = ['#EXTM3U', '#EXT-X-VERSION:3']
+                # Start 10 seconds from the end (live edge) to provide buffer against remux latency
+                lines.append('#EXT-X-START:TIME-OFFSET=-10.0,PRECISE=NO')
             else:
-                lines = ['#EXTM3U', '#EXT-X-VERSION:7', '#EXT-X-TARGETDURATION:10', '#EXT-X-PLAYLIST-TYPE:VOD']
+                lines = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:10', '#EXT-X-PLAYLIST-TYPE:VOD']
             
             # --- GESTIONE DRM (ClearKey) ---
             # Decrittazione lato server con mp4decrypt
@@ -147,9 +187,20 @@ class MPDToHLSConverter:
             if clearkey_param:
                 try:
                     kid_hex, key_hex = clearkey_param.split(':')
-                    server_side_decryption = True
-                    decryption_params = f"&key={key_hex}&key_id={kid_hex}"
-                    # Server-side decryption enabled
+                    
+                    # Rileva chiave nulla (placeholder) - se entrambi sono tutti zeri
+                    is_null_key = kid_hex.replace('0', '') == '' and key_hex.replace('0', '') == ''
+                    
+                    if is_null_key:
+                        # Chiave nulla: usa comunque l'endpoint decrypt per il remux a TS
+                        # ma aggiungi flag per saltare la decrittazione vera e propria
+                        logger.info(f"🔓 Null key detected - using remux endpoint without decryption")
+                        server_side_decryption = True
+                        decryption_params = f"&key={key_hex}&key_id={kid_hex}&skip_decrypt=1"
+                    else:
+                        server_side_decryption = True
+                        decryption_params = f"&key={key_hex}&key_id={kid_hex}"
+                        logger.info(f"🔐 ClearKey enabled - using server-side decryption")
                 except Exception as e:
                     logger.error(f"Errore parsing clearkey_param: {e}")
 
@@ -173,16 +224,21 @@ class MPDToHLSConverter:
 
                 # --- INITIALIZATION SEGMENT (EXT-X-MAP) ---
                 encoded_init_url = ""
+                # Get bandwidth from representation
+                bandwidth = representation.get('bandwidth', '')
+                
                 if initialization:
                     # Processing initialization segment
                     init_url = initialization.replace('$RepresentationID$', str(rep_id))
+                    init_url = init_url.replace('$Bandwidth$', str(bandwidth))
                     full_init_url = urljoin(base_url, init_url)
                     encoded_init_url = urllib.parse.quote(full_init_url, safe='')
                     
                     # Aggiungiamo EXT-X-MAP solo se NON usiamo decrittazione server
                     # Quando usiamo ffmpeg per decrittare, ogni segmento include già il moov
                     if not server_side_decryption:
-                        proxy_init_url = f"{proxy_base}/segment/init.mp4?base_url={encoded_init_url}{params}"
+                        header_params = self._extract_header_params(params)
+                        proxy_init_url = f"{proxy_base}/segment/init.mp4?base_url={encoded_init_url}{header_params}"
                         lines.append(f'#EXT-X-MAP:URI="{proxy_init_url}"')
 
                 # --- SEGMENT TIMELINE ---
@@ -218,50 +274,74 @@ class MPDToHLSConverter:
                     segments_to_use = all_segments
                     
                     if is_live and len(all_segments) > 0:
-                        # ✅ FIX LIVE: Includi solo gli ultimi ~30 secondi di segmenti
-                        # Questo forza il player a partire dal live edge invece che dall'inizio del DVR
-                        LIVE_WINDOW_SECONDS = 30
-                        total_duration = 0
-                        live_segments = []
-                        
-                        # Prendi segmenti dalla fine fino a raggiungere ~30 secondi
-                        for seg in reversed(all_segments):
-                            live_segments.insert(0, seg)
-                            total_duration += seg['duration']
-                            if total_duration >= LIVE_WINDOW_SECONDS:
-                                break
-                        
-                        segments_to_use = live_segments
-                        logger.info(f"🔴 LIVE: Filtrati {len(live_segments)}/{len(all_segments)} segmenti (ultimi ~{total_duration:.1f}s)")
+                        # Per LIVE: usa TUTTI i segmenti disponibili dal MPD
+                        # Non filtriamo per evitare problemi di timing
+                        segments_to_use = all_segments
+                        total_duration = sum(seg['duration'] for seg in all_segments)
+                        # logger.info(f"🔴 LIVE: Usando tutti {len(all_segments)} segmenti (~{total_duration:.1f}s)")
                         
                         # Calcola TARGETDURATION dal segmento più lungo
                         max_duration = max(seg['duration'] for seg in segments_to_use)
-                        lines.insert(2, f'#EXT-X-TARGETDURATION:{int(max_duration) + 1}')
-                        # MEDIA-SEQUENCE indica il primo segmento disponibile
-                        first_seg_number = segments_to_use[0]['number']
-                        lines.append(f'#EXT-X-MEDIA-SEQUENCE:{first_seg_number}')
+                        
+                        # Calcola MEDIA-SEQUENCE basato sul tempo per garantire incremento
+                        # Molti MPD live non aggiornano lo startNumber, quindi lo calcoliamo noi
+                        if len(segments_to_use) > 0:
+                            avg_duration = sum(seg['duration'] for seg in segments_to_use) / len(segments_to_use)
+                            
+                            # Fallback sequence number
+                            try:
+                                first_seg_number = segments_to_use[0]['number']
+                            except:
+                                first_seg_number = 1
+
+                            first_seg_time_sec = segments_to_use[0]['time'] / timescale
+                            
+                            if avg_duration > 0:
+                                calculated_seq = int(first_seg_time_sec / avg_duration)
+                            else:
+                                calculated_seq = first_seg_number
+                            
+                            lines.append(f'#EXT-X-TARGETDURATION:{int(max_duration) + 1}')
+                            lines.append(f'#EXT-X-MEDIA-SEQUENCE:{calculated_seq}')
                     else:
+                        # VOD: inizia da 0
+                        # logger.info(f"🔵 VOD Mode: {len(segments_to_use)} segments")
+                        if segments_to_use:
+                            max_duration = max(seg['duration'] for seg in segments_to_use)
+                            target_dur = int(max_duration) + 1
+                        else:
+                            target_dur = 10
+                            
+                        lines.append(f'#EXT-X-TARGETDURATION:{target_dur}')
                         lines.append('#EXT-X-MEDIA-SEQUENCE:0')
                     
                     for seg in segments_to_use:
                         # Costruisci URL segmento
                         seg_name = media.replace('$RepresentationID$', str(rep_id))
+                        seg_name = seg_name.replace('$Bandwidth$', str(bandwidth))
                         seg_name = seg_name.replace('$Number$', str(seg['number']))
                         seg_name = seg_name.replace('$Time$', str(seg['time']))
                         
                         full_seg_url = urljoin(base_url, seg_name)
                         encoded_seg_url = urllib.parse.quote(full_seg_url, safe='')
                         
+                        # Estrai solo il nome del file (senza query string) per il path del proxy
+                        # Questo evita URL con doppio ? (es: /segment/file.mp4?z32=...?base_url=...)
+                        seg_filename = seg_name.split('?')[0] if '?' in seg_name else seg_name
+                        
                         lines.append(f'#EXTINF:{seg["duration"]:.3f},')
+                        
+                        # Estrai solo i parametri header dalla query string originale
+                        header_params = self._extract_header_params(params)
                         
                         if server_side_decryption:
                             # Usa endpoint di decrittazione
                             # Passiamo init_url perché serve per la concatenazione
-                            decrypt_url = f"{proxy_base}/decrypt/segment.mp4?url={encoded_seg_url}&init_url={encoded_init_url}{decryption_params}{params}"
+                            decrypt_url = f"{proxy_base}/decrypt/segment.ts?url={encoded_seg_url}&init_url={encoded_init_url}{decryption_params}{header_params}"
                             lines.append(decrypt_url)
                         else:
-                            # Proxy standard
-                            proxy_seg_url = f"{proxy_base}/segment/{seg_name}?base_url={encoded_seg_url}{params}"
+                            # Proxy standard - usa filename senza query string per evitare doppio ?
+                            proxy_seg_url = f"{proxy_base}/segment/{seg_filename}?base_url={encoded_seg_url}{header_params}"
                             lines.append(proxy_seg_url)
                 
                 # --- SEGMENT TEMPLATE (DURATION) ---
@@ -281,11 +361,13 @@ class MPDToHLSConverter:
                         for i in range(total_segments):
                             seg_num = start_number + i
                             seg_name = media.replace('$RepresentationID$', str(rep_id))
+                            seg_name = seg_name.replace('$Bandwidth$', str(bandwidth))
                             seg_name = seg_name.replace('$Number$', str(seg_num))
                             
                             full_seg_url = urljoin(base_url, seg_name)
                             encoded_seg_url = urllib.parse.quote(full_seg_url, safe='')
-                            proxy_seg_url = f"{proxy_base}/segment/seg_{seg_num}.m4s?base_url={encoded_seg_url}{params}"
+                            header_params = self._extract_header_params(params)
+                            proxy_seg_url = f"{proxy_base}/segment/seg_{seg_num}.m4s?base_url={encoded_seg_url}{header_params}"
                             
                             lines.append(f'#EXTINF:{duration_sec:.6f},')
                             lines.append(proxy_seg_url)
@@ -294,8 +376,15 @@ class MPDToHLSConverter:
             if not is_live:
                 lines.append('#EXT-X-ENDLIST')
             
-            return '\n'.join(lines)
+            # Unisci le righe
+            playlist_content = '\n'.join(lines)
+            # logger.info(f"📜 Generated playlist for rep_id={rep_id} (first 15 lines):\n{chr(10).join(lines[:15])}")
+            # logger.info(f"📊 Total lines: {len(lines)}, Total segments: {len([l for l in lines if l.startswith('#EXTINF')])}")
+            
+            return playlist_content
 
         except Exception as e:
             logging.error(f"Errore conversione Media Playlist: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
             return "#EXTM3U\n#EXT-X-ERROR: " + str(e)
