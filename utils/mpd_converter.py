@@ -31,7 +31,7 @@ class MPDToHLSConverter:
         
         header_params = []
         for param in params.split('&'):
-            if param.startswith('h_') or param.startswith('api_password=') or param.startswith('clearkey='):
+            if param.startswith('h_') or param.startswith('api_password=') or param.startswith('clearkey=') or param.startswith('ext='):
                 header_params.append(param)
         
         if header_params:
@@ -174,8 +174,8 @@ class MPDToHLSConverter:
             # Per LIVE: non usare VOD e non aggiungere ENDLIST
             if is_live:
                 lines = ['#EXTM3U', '#EXT-X-VERSION:3']
-                # Start 10 seconds from the end (live edge) to provide buffer against remux latency
-                lines.append('#EXT-X-START:TIME-OFFSET=-10.0,PRECISE=NO')
+                # Start 30 seconds from the end (live edge) to provide more buffer
+                lines.append('#EXT-X-START:TIME-OFFSET=-30.0,PRECISE=NO')
             else:
                 lines = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:10', '#EXT-X-PLAYLIST-TYPE:VOD']
             
@@ -203,6 +203,19 @@ class MPDToHLSConverter:
                         logger.info(f"🔐 ClearKey enabled - using server-side decryption")
                 except Exception as e:
                     logger.error(f"Errore parsing clearkey_param: {e}")
+
+            # --- Check for forced TS extension ---
+            # If ext=ts is passed OR default, we force server side logic to remux to TS
+            # even if no key is present (skip_decrypt=1)
+            ext_param = "ts" # Default to TS as requested
+            if "ext=mp4" in params: # Allow opting out
+                 ext_param = "mp4"
+            
+            if ext_param == "ts" and not server_side_decryption:
+                 logger.info(f"🔄 Forced TS remux requested (ext=ts)")
+                 server_side_decryption = True
+                 # Use dummy key/id to satisfy the endpoint requirement, and set skip_decrypt=1
+                 decryption_params = "&key=00000000000000000000000000000000&key_id=00000000000000000000000000000000&skip_decrypt=1"
 
             # --- GESTIONE SEGMENTI ---
             # SegmentTemplate è il caso più comune per lo streaming live/vod moderno
@@ -274,17 +287,21 @@ class MPDToHLSConverter:
                     segments_to_use = all_segments
                     
                     if is_live and len(all_segments) > 0:
-                        # Per LIVE: usa TUTTI i segmenti disponibili dal MPD
-                        # Non filtriamo per evitare problemi di timing
-                        segments_to_use = all_segments
-                        total_duration = sum(seg['duration'] for seg in all_segments)
-                        # logger.info(f"🔴 LIVE: Usando tutti {len(all_segments)} segmenti (~{total_duration:.1f}s)")
+                        # Per LIVE: Sliding window - usa solo gli ultimi 20 segmenti
+                        # Questo evita che la playlist cresca all'infinito e mantiene il player "in sync"
+                        MAX_SEGMENTS = 20
+                        if len(all_segments) > MAX_SEGMENTS:
+                             segments_to_use = all_segments[-MAX_SEGMENTS:]
+                        else:
+                             segments_to_use = all_segments
+
+                        total_duration = sum(seg['duration'] for seg in segments_to_use)
                         
                         # Calcola TARGETDURATION dal segmento più lungo
                         max_duration = max(seg['duration'] for seg in segments_to_use)
                         
-                        # Calcola MEDIA-SEQUENCE basato sul tempo per garantire incremento
-                        # Molti MPD live non aggiornano lo startNumber, quindi lo calcoliamo noi
+                        # MEDIA-SEQUENCE deve essere calcolato temporalmente per evitare
+                        # che reset o mancati update del startNumber nel MPD rompano il playback
                         if len(segments_to_use) > 0:
                             avg_duration = sum(seg['duration'] for seg in segments_to_use) / len(segments_to_use)
                             

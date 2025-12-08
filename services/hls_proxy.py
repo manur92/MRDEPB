@@ -437,6 +437,11 @@ class HLSProxy:
                         if clearkey_param:
                             params += f"&clearkey={clearkey_param}"
                         
+                        # Pass 'ext' param if present (e.g. ext=ts)
+                        ext_param = request.query.get('ext')
+                        if ext_param:
+                            params += f"&ext={ext_param}"
+                        
                         # Check if requesting specific representation
                         rep_id = request.query.get('rep_id')
                         
