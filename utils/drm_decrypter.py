@@ -411,6 +411,15 @@ class MP4Decrypter:
     def _get_key_for_track(self, track_id: int) -> bytes:
         """
         Retrieves the decryption key for a given track ID from the key map.
+        
+        For multi-key scenarios (e.g., separate video/audio keys), the key_map
+        contains KID->KEY mappings. Since we don't have the KID for the current
+        track at this point, we use a simple strategy:
+        - If there's only 1 key, use it (original behavior)
+        - If there are multiple keys, return based on track_id index (0=first key, 1=second, etc.)
+        
+        This works because typically track 1 = video, track 2 = audio, and
+        the keys are passed in order: video_kid,audio_kid : video_key,audio_key
 
         Args:
             track_id (int): The track ID.
@@ -420,10 +429,12 @@ class MP4Decrypter:
         """
         if len(self.key_map) == 1:
             return next(iter(self.key_map.values()))
-        key = self.key_map.get(track_id.pack(4, "big"))
-        if not key:
-            raise ValueError(f"No key found for track ID {track_id}")
-        return key
+        
+        # Multi-key: return key by index based on track_id
+        # Track IDs are typically 1-based, so we use (track_id - 1) as index
+        keys_list = list(self.key_map.values())
+        key_index = (track_id - 1) % len(keys_list)
+        return keys_list[key_index]
 
     @staticmethod
     def _process_sample(
@@ -726,10 +737,27 @@ def decrypt_segment(init_segment: bytes, segment_content: bytes, key_id: str, ke
     Args:
         init_segment (bytes): Initialization segment data.
         segment_content (bytes): Encrypted segment content.
-        key_id (str): Key ID in hexadecimal format.
-        key (str): Key in hexadecimal format.
+        key_id (str): Key ID(s) in hexadecimal format. Supports comma-separated for multi-key: "KID1,KID2"
+        key (str): Key(s) in hexadecimal format. Supports comma-separated for multi-key: "KEY1,KEY2"
+    
+    Returns:
+        bytes: Decrypted segment content.
+    
+    Raises:
+        ValueError: If the number of key_ids doesn't match the number of keys.
     """
-    key_map = {bytes.fromhex(key_id): bytes.fromhex(key)}
+    # Support multi-key: "KID1,KID2" and "KEY1,KEY2"
+    kid_list = [k.strip() for k in key_id.split(',')]
+    key_list = [k.strip() for k in key.split(',')]
+    
+    if len(kid_list) != len(key_list):
+        raise ValueError(f"Mismatched key_id/key count: {len(kid_list)} key_ids vs {len(key_list)} keys")
+    
+    # Build key_map with all key pairs
+    key_map = {}
+    for kid, k in zip(kid_list, key_list):
+        key_map[bytes.fromhex(kid)] = bytes.fromhex(k)
+    
     decrypter = MP4Decrypter(key_map)
     decrypted_content = decrypter.decrypt_segment(init_segment + segment_content)
     return decrypted_content

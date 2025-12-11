@@ -47,8 +47,17 @@ class ManifestRewriter:
             # --- GESTIONE CLEARKEY STATICA ---
             if clearkey_param:
                 try:
-                    kid_hex, key_hex = clearkey_param.split(':')
+                    # Support multiple keys separated by comma
+                    # Format: KID1:KEY1,KID2:KEY2
+                    key_pairs = clearkey_param.split(',')
                     
+                    # Usa il primo KID come default per cenc:default_KID se disponibile
+                    first_kid_hex = None
+                    if key_pairs:
+                        first_pair = key_pairs[0]
+                        if ':' in first_pair:
+                            first_kid_hex = first_pair.split(':')[0]
+
                     # Crea l'elemento ContentProtection per ClearKey
                     cp_element = ET.Element('ContentProtection')
                     cp_element.set('schemeIdUri', 'urn:uuid:e2719d58-a985-b3c9-781a-007147f192ec')
@@ -68,8 +77,8 @@ class ManifestRewriter:
                     laurl_dashif.text = license_url
                     
                     # 3. Aggiungi cenc:default_KID
-                    if len(kid_hex) == 32:
-                        kid_guid = f"{kid_hex[:8]}-{kid_hex[8:12]}-{kid_hex[12:16]}-{kid_hex[16:20]}-{kid_hex[20:]}"
+                    if first_kid_hex and len(first_kid_hex) == 32:
+                        kid_guid = f"{first_kid_hex[:8]}-{first_kid_hex[8:12]}-{first_kid_hex[12:16]}-{first_kid_hex[16:20]}-{first_kid_hex[20:]}"
                         cp_element.set('{urn:mpeg:cenc:2013}default_KID', kid_guid)
 
                     # Inietta ContentProtection

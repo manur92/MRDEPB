@@ -80,7 +80,7 @@ class GenericHLSExtractor:
             if h_lower == "user-agent":
                 continue
                 
-            if h_lower in ["authorization", "x-api-key", "x-auth-token", "cookie"]:
+            if h_lower in ["authorization", "x-api-key", "x-auth-token", "cookie", "referer", "origin"]:
                 headers[h] = v
             # Explicitly block forwarding of IP-related headers
             if h_lower in ["x-forwarded-for", "x-real-ip", "forwarded", "via"]:

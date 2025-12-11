@@ -111,18 +111,30 @@ class FFmpegManager:
             "-headers", headers_str,
         ]
         
-        # Decryption Key handling
+        # Decryption Key handling - supports multi-key format "KID1:KEY1,KID2:KEY2"
         if clearkey:
             try:
-                # Format expected: KID:KEY or just KEY? 
-                # FFmpeg -decryption_key expects just the key in hex.
-                # If clearkey param is KID:KEY, we split it.
+                # Expected format: KID1:KEY1,KID2:KEY2
+                # Or just KEY (if single key without KID, legacy)
+                keys_to_use = []
+                
                 if ':' in clearkey:
-                    kid, key = clearkey.split(':')
-                    # FFmpeg DASH demuxer uses -cenc_decryption_key
-                    cmd.extend(["-cenc_decryption_key", key])
+                     pairs = clearkey.split(',')
+                     for pair in pairs:
+                         if ':' in pair:
+                             _, key = pair.split(':')
+                             keys_to_use.append(key.strip())
+                         else:
+                             # Fallback specific weird cases?
+                             pass
                 else:
-                    cmd.extend(["-cenc_decryption_key", clearkey])
+                    keys_to_use.append(clearkey)
+                
+                for key in keys_to_use:
+                    cmd.extend(["-cenc_decryption_key", key])
+                
+                if keys_to_use:
+                    logger.info(f"Added {len(keys_to_use)} decryption key(s) to FFmpeg command")
             except Exception as e:
                 logger.error(f"Error parsing clearkey: {e}")
 

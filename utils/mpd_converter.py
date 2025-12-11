@@ -186,10 +186,27 @@ class MPDToHLSConverter:
             
             if clearkey_param:
                 try:
-                    kid_hex, key_hex = clearkey_param.split(':')
+                    # Supporta formato multi-key: "KID1:KEY1,KID2:KEY2"
+                    # O "KID:KEY" (legacy simple)
+                    kids = []
+                    keys = []
                     
-                    # Rileva chiave nulla (placeholder) - se entrambi sono tutti zeri
-                    is_null_key = kid_hex.replace('0', '') == '' and key_hex.replace('0', '') == ''
+                    # Split by comma first to handle multiple pairs
+                    pairs = clearkey_param.split(',')
+                    for pair in pairs:
+                        if ':' in pair:
+                            k_id, k_val = pair.split(':')
+                            kids.append(k_id.strip())
+                            keys.append(k_val.strip())
+                    
+                    if not kids or not keys:
+                        raise ValueError(f"Invalid clearkey format: {clearkey_param}")
+                        
+                    kid_hex = ",".join(kids)
+                    key_hex = ",".join(keys)
+                    
+                    # Rileva chiave nulla (placeholder) - se TUTTE le chiavi sono tutti zeri
+                    is_null_key = all(k.replace('0', '') == '' for k in kids + keys)
                     
                     if is_null_key:
                         # Chiave nulla: usa comunque l'endpoint decrypt per il remux a TS
@@ -199,8 +216,10 @@ class MPDToHLSConverter:
                         decryption_params = f"&key={key_hex}&key_id={kid_hex}&skip_decrypt=1"
                     else:
                         server_side_decryption = True
+                        # Passa chiavi multiple nel formato esistente (comma-separated)
                         decryption_params = f"&key={key_hex}&key_id={kid_hex}"
-                        logger.info(f"🔐 ClearKey enabled - using server-side decryption")
+                        key_count = len(kids)
+                        logger.info(f"🔐 ClearKey enabled - {key_count} key pair(s) for server-side decryption")
                 except Exception as e:
                     logger.error(f"Errore parsing clearkey_param: {e}")
 

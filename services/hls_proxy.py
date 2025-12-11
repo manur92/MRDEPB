@@ -360,14 +360,37 @@ class HLSProxy:
                         # Extract ClearKey if present
                         clearkey_param = request.query.get('clearkey')
                         
-                        # Support separate key_id and key params
+                        # Support separate key_id and key params (handling multiple keys)
                         if not clearkey_param:
-                            key_id = request.query.get('key_id')
-                            key_val = request.query.get('key')
-                            if key_id and key_val:
-                                clearkey_param = f"{key_id}:{key_val}"
-                            elif key_val:
-                                clearkey_param = key_val
+                            key_id_param = request.query.get('key_id')
+                            key_val_param = request.query.get('key')
+                            
+                            if key_id_param and key_val_param:
+                                # Check for multiple keys
+                                key_ids = key_id_param.split(',')
+                                key_vals = key_val_param.split(',')
+                                
+                                if len(key_ids) == len(key_vals):
+                                    clearkey_parts = []
+                                    for kid, kval in zip(key_ids, key_vals):
+                                        clearkey_parts.append(f"{kid.strip()}:{kval.strip()}")
+                                    clearkey_param = ",".join(clearkey_parts)
+                                else:
+                                    # Fallback or error? defaulting to first or simple concat if mismatch
+                                    # Let's try to handle single mismatch case gracefully or just use as is
+                                    if len(key_ids) == 1 and len(key_vals) == 1:
+                                         clearkey_param = f"{key_id_param}:{key_val_param}"
+                                    else:
+                                         logger.warning(f"Mismatch in key_id/key count: {len(key_ids)} vs {len(key_vals)}")
+                                         # Try to pair as many as possible
+                                         min_len = min(len(key_ids), len(key_vals))
+                                         clearkey_parts = []
+                                         for i in range(min_len):
+                                             clearkey_parts.append(f"{key_ids[i].strip()}:{key_vals[i].strip()}")
+                                         clearkey_param = ",".join(clearkey_parts)
+
+                            elif key_val_param:
+                                clearkey_param = key_val_param
                         
                         playlist_rel_path = await self.ffmpeg_manager.get_stream(stream_url, stream_headers, clearkey=clearkey_param)
                         
@@ -406,9 +429,19 @@ class HLSProxy:
                         
                         # Fetch the MPD manifest
                         session = await self._get_session()
-                        async with session.get(stream_url, headers=stream_headers) as resp:
+                        
+                        # Fix SSL Verification for legacy requests
+                        ssl_context = None
+                        if get_ssl_setting_for_url(stream_url, TRANSPORT_ROUTES):
+                            ssl_context = False
+
+                        async with session.get(stream_url, headers=stream_headers, ssl=ssl_context) as resp:
                             if resp.status != 200:
-                                return web.Response(text=f"Failed to fetch MPD: {resp.status}", status=502)
+                                error_text = await resp.text()
+                                logger.error(f"❌ Failed to fetch MPD. Status: {resp.status}, URL: {stream_url}")
+                                logger.error(f"   Headers: {stream_headers}")
+                                logger.error(f"   Response: {error_text[:500]}") # Truncate for safety
+                                return web.Response(text=f"Failed to fetch MPD: {resp.status}\nResponse: {error_text[:1000]}", status=502)
                             manifest_content = await resp.text()
                         
                         # Build proxy base URL
@@ -427,12 +460,32 @@ class HLSProxy:
                         # Get ClearKey param
                         clearkey_param = request.query.get('clearkey')
                         if not clearkey_param:
-                            key_id = request.query.get('key_id')
-                            key_val = request.query.get('key')
-                            if key_id and key_val:
-                                clearkey_param = f"{key_id}:{key_val}"
-                            elif key_val:
-                                clearkey_param = key_val
+                            key_id_param = request.query.get('key_id')
+                            key_val_param = request.query.get('key')
+                            
+                            if key_id_param and key_val_param:
+                                # Check for multiple keys
+                                key_ids = key_id_param.split(',')
+                                key_vals = key_val_param.split(',')
+                                
+                                if len(key_ids) == len(key_vals):
+                                    clearkey_parts = []
+                                    for kid, kval in zip(key_ids, key_vals):
+                                        clearkey_parts.append(f"{kid.strip()}:{kval.strip()}")
+                                    clearkey_param = ",".join(clearkey_parts)
+                                else:
+                                    if len(key_ids) == 1 and len(key_vals) == 1:
+                                         clearkey_param = f"{key_id_param}:{key_val_param}"
+                                    else:
+                                         logger.warning(f"Mismatch in key_id/key count: {len(key_ids)} vs {len(key_vals)}")
+                                         # Try to pair as many as possible
+                                         min_len = min(len(key_ids), len(key_vals))
+                                         clearkey_parts = []
+                                         for i in range(min_len):
+                                             clearkey_parts.append(f"{key_ids[i].strip()}:{key_vals[i].strip()}")
+                                         clearkey_param = ",".join(clearkey_parts)
+                            elif key_val_param:
+                                clearkey_param = key_val_param
                         
                         if clearkey_param:
                             params += f"&clearkey={clearkey_param}"
@@ -639,23 +692,34 @@ class HLSProxy:
             if clearkey_param:
                 logger.info(f"🔑 Richiesta licenza ClearKey statica: {clearkey_param}")
                 try:
-                    kid_hex, key_hex = clearkey_param.split(':')
+                    # Support multiple keys separated by comma
+                    # Format: KID1:KEY1,KID2:KEY2
+                    key_pairs = clearkey_param.split(',')
+                    keys_jwk = []
                     
-                    # Converte hex in base64url (senza padding) come richiesto da JWK
+                    # Helper per convertire hex in base64url
                     def hex_to_b64url(hex_str):
                         return base64.urlsafe_b64encode(binascii.unhexlify(hex_str)).decode('utf-8').rstrip('=')
 
+                    for pair in key_pairs:
+                        if ':' in pair:
+                            kid_hex, key_hex = pair.split(':')
+                            keys_jwk.append({
+                                "kty": "oct",
+                                "k": hex_to_b64url(key_hex),
+                                "kid": hex_to_b64url(kid_hex),
+                                "type": "temporary"
+                            })
+                    
+                    if not keys_jwk:
+                        raise ValueError("No valid keys found")
+
                     jwk_response = {
-                        "keys": [{
-                            "kty": "oct",
-                            "k": hex_to_b64url(key_hex),
-                            "kid": hex_to_b64url(kid_hex),
-                            "type": "temporary"
-                        }],
+                        "keys": keys_jwk,
                         "type": "temporary"
                     }
                     
-                    logger.info(f"🔑 Serving static ClearKey license for KID: {kid_hex}")
+                    logger.info(f"🔑 Serving static ClearKey license with {len(keys_jwk)} keys")
                     return web.json_response(jwk_response)
                 except Exception as e:
                     logger.error(f"❌ Errore nella generazione della licenza ClearKey statica: {e}")
@@ -990,10 +1054,29 @@ class HLSProxy:
                         
                         # ✅ FIX: Supporto per key_id e key separati (stile MediaFlowProxy)
                         if not clearkey_param:
-                            key_id = request.query.get('key_id')
-                            key = request.query.get('key')
-                            if key_id and key:
-                                clearkey_param = f"{key_id}:{key}"
+                            key_id_param = request.query.get('key_id')
+                            key_val_param = request.query.get('key')
+                            
+                            if key_id_param and key_val_param:
+                                # Check for multiple keys
+                                key_ids = key_id_param.split(',')
+                                key_vals = key_val_param.split(',')
+                                
+                                if len(key_ids) == len(key_vals):
+                                    clearkey_parts = []
+                                    for kid, kval in zip(key_ids, key_vals):
+                                        clearkey_parts.append(f"{kid.strip()}:{kval.strip()}")
+                                    clearkey_param = ",".join(clearkey_parts)
+                                else:
+                                    if len(key_ids) == 1 and len(key_vals) == 1:
+                                         clearkey_param = f"{key_id_param}:{key_val_param}"
+                                    else:
+                                         # Try to pair as many as possible
+                                         min_len = min(len(key_ids), len(key_vals))
+                                         clearkey_parts = []
+                                         for i in range(min_len):
+                                             clearkey_parts.append(f"{key_ids[i].strip()}:{key_vals[i].strip()}")
+                                         clearkey_param = ",".join(clearkey_parts)
 
                         # --- LEGACY MODE: MPD -> HLS Conversion ---
                         if MPD_MODE == "legacy" and MPDToHLSConverter:
@@ -1324,7 +1407,9 @@ class HLSProxy:
 
             if segment_content:
                 # Decrypt
-                decrypted_content = decrypt_segment(init_content, segment_content, key_id, key)
+                # Decrypt in thread pool to avoid blocking event loop
+                loop = asyncio.get_event_loop()
+                decrypted_content = await loop.run_in_executor(None, decrypt_segment, init_content, segment_content, key_id, key)
                 import time
                 self.segment_cache[cache_key] = (decrypted_content, time.time())
                 logger.info(f"📦 Prefetched segment: {url.split('/')[-1]}")
@@ -1467,7 +1552,9 @@ class HLSProxy:
                 combined_content = init_content + segment_content
             else:
                 # Decripta con PyCryptodome
-                combined_content = decrypt_segment(init_content, segment_content, key_id, key)
+                # Decrypt in thread pool to avoid blocking event loop
+                loop = asyncio.get_event_loop()
+                combined_content = await loop.run_in_executor(None, decrypt_segment, init_content, segment_content, key_id, key)
 
             # Leggero REMUX to TS
             ts_content = await self._remux_to_ts(combined_content)

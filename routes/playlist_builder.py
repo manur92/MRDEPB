@@ -31,12 +31,39 @@ class PlaylistBuilder:
                 # Extract clearkey from license_key tag
                 if 'inputstream.adaptive.license_key' in logical_line:
                     try:
-                        # Format: #KODIPROP:inputstream.adaptive.license_key=KID:KEY (already in hex)
-                        value = logical_line.split('=', 1)[1]
+                        # Format: #KODIPROP:inputstream.adaptive.license_key=VALUE
+                        value = logical_line.split('=', 1)[1].strip()
                         
-                        # Skip placeholder values like "0000"
-                        if value and ':' in value and value != '0000':
-                            current_clearkey = value
+                        # Check if it's a JSON object (starts with {)
+                        if value.startswith('{'):
+                            try:
+                                license_data = json.loads(value)
+                                keys = license_data.get('keys', [])
+                                clearkey_parts = []
+                                for key_item in keys:
+                                    kty = key_item.get('kty')
+                                    k = key_item.get('k')
+                                    kid = key_item.get('kid')
+                                    
+                                    if kty == 'oct' and k and kid:
+                                        # Convert Base64 URL safe to Hex for internal use if needed, 
+                                        # BUT example shows Hex in JSON? 
+                                        # Wait, user example: "k":"8c4a...", "kid":"dc2a..." -> these look like HEX already?
+                                        # Let's check user request again.
+                                        # User request: "k":"8c4a62f998bd4b6911034bbd7b911b9a","kid":"dc2a18580acc80befd2505253ad69368"
+                                        # Yes, they are HEX strings.
+                                        clearkey_parts.append(f"{kid}:{k}")
+                                
+                                if clearkey_parts:
+                                    current_clearkey = ",".join(clearkey_parts)
+                                    # logger.info(f"Parsed parsed multiple keys: {current_clearkey}")
+                            except json.JSONDecodeError:
+                                logger.error(f"⚠️ Error decoding JSON license_key: {value}")
+                        else:
+                            # Standard Format: KID:KEY (already in hex)
+                            # Skip placeholder values like "0000"
+                            if value and ':' in value and value != '0000':
+                                current_clearkey = value
                     except Exception as e:
                         logger.error(f"⚠️ Error parsing KODIPROP license_key '{logical_line}': {e}")
                 
