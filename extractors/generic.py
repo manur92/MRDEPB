@@ -76,11 +76,16 @@ class GenericHLSExtractor:
         # Only allow specific headers that are safe or necessary for authentication.
         for h, v in self.request_headers.items():
             h_lower = h.lower()
-            # ✅ FIX: Non copiare User-Agent dal client se abbiamo già un base_header user-agent
+            # ✅ FIX DLHD: Ora accetta User-Agent passato via h_ params (contiene Chrome UA completo)
+            # Salta solo se è lo User-Agent del player (es. "Player (Linux; Android 13)")
+            # ma accetta se è un Chrome UA (contiene "Chrome" o "AppleWebKit")
             if h_lower == "user-agent":
+                # Se è un vero browser UA (ha Chrome/Safari), usalo sovrascrivendo il default
+                if "chrome" in v.lower() or "applewebkit" in v.lower():
+                    headers["user-agent"] = v
                 continue
                 
-            if h_lower in ["authorization", "x-api-key", "x-auth-token", "cookie", "referer", "origin"]:
+            if h_lower in ["authorization", "x-api-key", "x-auth-token", "cookie", "referer", "origin", "x-channel-key"]:
                 headers[h] = v
             # Explicitly block forwarding of IP-related headers
             if h_lower in ["x-forwarded-for", "x-real-ip", "forwarded", "via"]:

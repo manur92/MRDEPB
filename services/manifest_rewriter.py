@@ -188,7 +188,18 @@ class ManifestRewriter:
                 return '\n'.join(rewritten_lines)
 
         # --- Logica Standard (incluso DLHD) ---
-        header_params = "".join([f"&h_{urllib.parse.quote(key)}={urllib.parse.quote(value)}" for key, value in stream_headers.items()])
+        # ✅ FIX DLHD: Il CDN dei segmenti (ai.playerfuncc.fun) è S3-style e rifiuta headers
+        # come Authorization e X-Channel-Key con "InvalidArgument". Per DLHD, passiamo solo
+        # gli headers necessari (Referer, User-Agent, Origin) ai segmenti.
+        if is_dlhd_stream:
+            # Per DLHD, filtra solo gli headers che il CDN accetta
+            segment_headers = {k: v for k, v in stream_headers.items() 
+                             if k.lower() in ['referer', 'user-agent', 'origin']}
+            header_params = "".join([f"&h_{urllib.parse.quote(key)}={urllib.parse.quote(value)}" 
+                                    for key, value in segment_headers.items()])
+        else:
+            header_params = "".join([f"&h_{urllib.parse.quote(key)}={urllib.parse.quote(value)}" 
+                                    for key, value in stream_headers.items()])
         
         if api_password:
             header_params += f"&api_password={api_password}"

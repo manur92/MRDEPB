@@ -319,26 +319,16 @@ class MPDToHLSConverter:
                         # Calcola TARGETDURATION dal segmento più lungo
                         max_duration = max(seg['duration'] for seg in segments_to_use)
                         
-                        # MEDIA-SEQUENCE deve essere calcolato temporalmente per evitare
-                        # che reset o mancati update del startNumber nel MPD rompano il playback
+                        # MEDIA-SEQUENCE deve usare il numero di segmento originale
+                        # per garantire sincronizzazione tra video e audio in stream multi-key
                         if len(segments_to_use) > 0:
-                            avg_duration = sum(seg['duration'] for seg in segments_to_use) / len(segments_to_use)
-                            
-                            # Fallback sequence number
-                            try:
-                                first_seg_number = segments_to_use[0]['number']
-                            except:
-                                first_seg_number = 1
-
-                            first_seg_time_sec = segments_to_use[0]['time'] / timescale
-                            
-                            if avg_duration > 0:
-                                calculated_seq = int(first_seg_time_sec / avg_duration)
-                            else:
-                                calculated_seq = first_seg_number
+                            # Usa direttamente il numero del primo segmento
+                            # Questo è consistente tra video e audio perché entrambi usano
+                            # lo stesso startNumber e schema di numerazione del MPD
+                            first_seg_number = segments_to_use[0]['number']
                             
                             lines.append(f'#EXT-X-TARGETDURATION:{int(max_duration) + 1}')
-                            lines.append(f'#EXT-X-MEDIA-SEQUENCE:{calculated_seq}')
+                            lines.append(f'#EXT-X-MEDIA-SEQUENCE:{first_seg_number}')
                     else:
                         # VOD: inizia da 0
                         # logger.info(f"🔵 VOD Mode: {len(segments_to_use)} segments")
