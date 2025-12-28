@@ -287,23 +287,33 @@ class ManifestRewriter:
                 if base_query and '?' not in absolute_url:
                     absolute_url += f"?{base_query}"
 
-                encoded_url = urllib.parse.quote(absolute_url, safe='')
-
-                # Se è .m3u8 usa /proxy/manifest.m3u8, altrimenti determina estensione
-                if '.m3u8' in absolute_url:
-                     proxy_url = f"{proxy_base}/proxy/manifest.m3u8?url={encoded_url}{header_params}"
-                else:
-                     # ✅ FIX: Determina estensione corretta per il segmento
-                     # Se l'URL originale ha estensione mp4/m4s, usa .mp4, altrimenti default a .ts
-                     # Questo aiuta i player a distinguere tra TS e fMP4
-                     path = urllib.parse.urlparse(absolute_url).path
-                     ext = '.ts'
-                     if path.endswith('.m4s') or path.endswith('.mp4') or path.endswith('.m4v'):
-                         ext = '.mp4'
-                     
-                     proxy_url = f"{proxy_base}/proxy/hls/segment{ext}?d={encoded_url}{header_params}"
+                # ✅ BYPASS: Non proxare segmenti di domini con token a scadenza rapida
+                # Freeshot (planetary.lovecdn.ru) ha token che scadono in ~20-30 secondi
+                # Se proxiamo, il token scade prima che il player richieda i segmenti
+                no_proxy_domains = ['planetary.lovecdn.ru', 'lovecdn.ru']
+                should_bypass = any(domain in absolute_url for domain in no_proxy_domains)
                 
-                rewritten_lines.append(proxy_url)
+                if should_bypass:
+                    # Serve l'URL diretto senza passare dal proxy
+                    rewritten_lines.append(absolute_url)
+                else:
+                    encoded_url = urllib.parse.quote(absolute_url, safe='')
+
+                    # Se è .m3u8 usa /proxy/manifest.m3u8, altrimenti determina estensione
+                    if '.m3u8' in absolute_url:
+                         proxy_url = f"{proxy_base}/proxy/manifest.m3u8?url={encoded_url}{header_params}"
+                    else:
+                         # ✅ FIX: Determina estensione corretta per il segmento
+                         # Se l'URL originale ha estensione mp4/m4s, usa .mp4, altrimenti default a .ts
+                         # Questo aiuta i player a distinguere tra TS e fMP4
+                         path = urllib.parse.urlparse(absolute_url).path
+                         ext = '.ts'
+                         if path.endswith('.m4s') or path.endswith('.mp4') or path.endswith('.m4v'):
+                             ext = '.mp4'
+                         
+                         proxy_url = f"{proxy_base}/proxy/hls/segment{ext}?d={encoded_url}{header_params}"
+                    
+                    rewritten_lines.append(proxy_url)
 
             else:
                 # Tutti gli altri tag (es. #EXTINF, #EXT-X-ENDLIST)

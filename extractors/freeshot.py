@@ -40,21 +40,28 @@ class FreeshotExtractor:
         """
         Estrae l'URL m3u8 da un link popcdn.day o da un codice canale.
         Input url può essere:
-        1. https://popcdn.day/go.php?stream=CODICE
-        2. freeshot://CODICE (se vogliamo supportare un custom scheme)
-        3. CODICE (se passato come parametro d=CODICE e host=freeshot)
+        1. https://popcdn.day/player/CODICE (nuovo formato)
+        2. https://popcdn.day/go.php?stream=CODICE (vecchio formato - convertito)
+        3. freeshot://CODICE (se vogliamo supportare un custom scheme)
+        4. CODICE (se passato come parametro d=CODICE e host=freeshot)
         """
         
-        # Determina il codice canale o l'URL completo
-        target_url = url
-        if not url.startswith('http'):
-            # Se è solo il codice, costruisci l'URL
-            target_url = f"https://popcdn.day/go.php?stream={urllib.parse.quote(url)}"
-        elif "popcdn.day" not in url:
-             # Fallback se arriva un URL strano, assumiamo sia il codice se non è un URL valido
-             pass
+        # Determina il codice canale
+        channel_code = url
+        
+        # Estrai il codice dal vecchio formato go.php
+        if "go.php?stream=" in url:
+            channel_code = url.split("go.php?stream=")[-1].split("&")[0]
+        elif "popcdn.day/player/" in url:
+            channel_code = url.split("/player/")[-1].split("?")[0].split("/")[0]
+        elif url.startswith('http'):
+            # URL sconosciuto, prova a usarlo come codice
+            channel_code = urllib.parse.urlparse(url).path.split("/")[-1]
+        
+        # Nuovo URL formato /player/
+        target_url = f"https://popcdn.day/player/{urllib.parse.quote(channel_code)}"
 
-        logger.info(f"FreeshotExtractor: Risoluzione {target_url}")
+        logger.info(f"FreeshotExtractor: Risoluzione {target_url} (channel: {channel_code})")
         
         session = await self._get_session()
         
@@ -63,17 +70,27 @@ class FreeshotExtractor:
                 if resp.status != 200:
                     raise ExtractorError(f"Freeshot request failed: {resp.status}")
                 body = await resp.text()
-                
-            # Estrazione iframe
-            match = re.search(r'frameborder="0"\s+src="([^"]+)"', body, re.IGNORECASE)
-            if not match:
-                raise ExtractorError("Freeshot iframe not found")
-                
-            iframe_url = match.group(1)
             
-            # Conversione in m3u8
-            # L'URL contiene già il token e il parametro 'remote' con l'IP del chiamante (MFP)
-            m3u8_url = iframe_url.replace('embed.html', 'index.fmp4.m3u8')
+            # Nuova estrazione token via currentToken
+            match = re.search(r'currentToken:\s*["\']([^"\']+)["\']', body)
+            if not match:
+                # Fallback al vecchio metodo iframe
+                match = re.search(r'frameborder="0"\s+src="([^"]+)"', body, re.IGNORECASE)
+                if match:
+                    iframe_url = match.group(1)
+                    # Estrai token dall'iframe URL
+                    token_match = re.search(r'token=([^&]+)', iframe_url)
+                    if token_match:
+                        token = token_match.group(1)
+                    else:
+                        raise ExtractorError("Freeshot token not found in iframe")
+                else:
+                    raise ExtractorError("Freeshot token/iframe not found")
+            else:
+                token = match.group(1)
+            
+            # Nuovo formato URL m3u8: tracks-v1a1/mono.m3u8
+            m3u8_url = f"https://planetary.lovecdn.ru/{channel_code}/tracks-v1a1/mono.m3u8?token={token}"
             
             logger.info(f"FreeshotExtractor: Risolto -> {m3u8_url}")
             
@@ -82,10 +99,10 @@ class FreeshotExtractor:
                 "destination_url": m3u8_url,
                 "request_headers": {
                     "User-Agent": self.base_headers["User-Agent"],
-                    "Referer": iframe_url,
-                    "Origin": f"https://{urllib.parse.urlparse(iframe_url).netloc}"
+                    "Referer": "https://popcdn.day/",
+                    "Origin": "https://popcdn.day"
                 },
-                "mediaflow_endpoint": "hls_proxy" # O "hls_manifest_proxy" se vogliamo manipolare il manifest
+                "mediaflow_endpoint": "hls_proxy"
             }
             
         except Exception as e:

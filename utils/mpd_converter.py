@@ -319,16 +319,24 @@ class MPDToHLSConverter:
                         # Calcola TARGETDURATION dal segmento più lungo
                         max_duration = max(seg['duration'] for seg in segments_to_use)
                         
-                        # MEDIA-SEQUENCE deve usare il numero di segmento originale
-                        # per garantire sincronizzazione tra video e audio in stream multi-key
+                        # MEDIA-SEQUENCE deve essere basato sul timestamp del primo segmento
+                        # per garantire che quando il manifest viene ricaricato, il player
+                        # sappia quali segmenti ha già scaricato e quali sono nuovi.
+                        # 
+                        # Per LIVE stream multi-key, calcoliamo la sequenza dal timestamp:
+                        # sequence = first_segment_timestamp / segment_duration (in timescale units)
+                        # Questo garantisce che video e audio abbiano lo stesso MEDIA-SEQUENCE
+                        # anche se hanno timestamp leggermente diversi, perché usiamo il floor.
                         if len(segments_to_use) > 0:
-                            # Usa direttamente il numero del primo segmento
-                            # Questo è consistente tra video e audio perché entrambi usano
-                            # lo stesso startNumber e schema di numerazione del MPD
-                            first_seg_number = segments_to_use[0]['number']
+                            first_seg_time = segments_to_use[0]['time']
+                            segment_duration_ts = segments_to_use[0]['d']  # Duration in timescale units
+                            
+                            # Calcola sequence number basato sul tempo
+                            # Usa floor division per consistenza tra video/audio
+                            media_sequence = first_seg_time // segment_duration_ts
                             
                             lines.append(f'#EXT-X-TARGETDURATION:{int(max_duration) + 1}')
-                            lines.append(f'#EXT-X-MEDIA-SEQUENCE:{first_seg_number}')
+                            lines.append(f'#EXT-X-MEDIA-SEQUENCE:{media_sequence}')
                     else:
                         # VOD: inizia da 0
                         # logger.info(f"🔵 VOD Mode: {len(segments_to_use)} segments")
