@@ -10,7 +10,7 @@ import random
 import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 import zstandard # Importa la libreria zstandard
-from aiohttp_proxy import ProxyConnector
+from aiohttp_socks import ProxyConnector
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ class SportsonlineExtractor:
                 logger.info(f"Utilizzo del proxy {proxy} per la sessione Sportsonline.")
                 connector = ProxyConnector.from_url(proxy)
             else:
-                connector = TCPConnector(limit=10, limit_per_host=3)
+                connector = TCPConnector(limit=0, limit_per_host=0)
 
             self.session = ClientSession(
                 timeout=timeout,

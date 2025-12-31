@@ -2,7 +2,7 @@ import logging
 import re
 import urllib.parse
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
-from aiohttp_proxy import ProxyConnector
+from aiohttp_socks import ProxyConnector
 
 logger = logging.getLogger(__name__)
 

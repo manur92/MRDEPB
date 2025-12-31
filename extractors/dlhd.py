@@ -12,7 +12,7 @@ import time
 from urllib.parse import urlparse, quote_plus
 import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector, FormData
-from aiohttp_proxy import ProxyConnector
+from aiohttp_socks import ProxyConnector
 from typing import Dict, Any, Optional
 from urllib.parse import urljoin
 
@@ -110,8 +110,8 @@ class DLHDExtractor:
                 connector = ProxyConnector.from_url(proxy, ssl=False)
             else:
                 connector = TCPConnector(
-                    limit=10,
-                    limit_per_host=3,
+                    limit=0,
+                    limit_per_host=0,
                     keepalive_timeout=30,
                     enable_cleanup_closed=True,
                     force_close=False,

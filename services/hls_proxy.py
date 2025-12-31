@@ -12,7 +12,7 @@ import json
 import ssl
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout, TCPConnector, ClientPayloadError, ServerDisconnectedError, ClientConnectionError
-from aiohttp_proxy import ProxyConnector
+from aiohttp_socks import ProxyConnector
 
 from config import GLOBAL_PROXIES, TRANSPORT_ROUTES, get_proxy_for_url, get_ssl_setting_for_url, API_PASSWORD, check_password, MPD_MODE
 from extractors.generic import GenericHLSExtractor, ExtractorError
@@ -122,15 +122,19 @@ class HLSProxy:
         # Prefetch queue for background downloading
         self.prefetch_tasks = set()
         
-        # Sessione condivisa per il proxy
+        # Sessione condivisa per il proxy (no proxy)
         self.session = None
+        
+        # Cache for proxy sessions (proxy_url -> session)
+        # This reuses connections for the same proxy to improve performance
+        self.proxy_sessions = {}
 
     async def _get_session(self):
         if self.session is None or self.session.closed:
-            # Optimized connector with larger pool for concurrent segment downloads
+            # Unlimited connections for maximum speed
             connector = TCPConnector(
-                limit=100,  # Max total connections
-                limit_per_host=30,  # Max per host
+                limit=0,  # Unlimited connections
+                limit_per_host=0,  # Unlimited per host
                 keepalive_timeout=60,  # Keep connections alive longer
                 enable_cleanup_closed=True
             )
@@ -139,6 +143,49 @@ class HLSProxy:
                 connector=connector
             )
         return self.session
+
+    async def _get_proxy_session(self, url: str):
+        """Get a session with proxy support for the given URL.
+        
+        Sessions are cached and reused for the same proxy to improve performance.
+        
+        Returns: (session, should_close) tuple
+        - session: The aiohttp ClientSession to use
+        - should_close: Always False now since sessions are cached and reused
+        """
+        proxy = get_proxy_for_url(url, TRANSPORT_ROUTES, GLOBAL_PROXIES)
+        
+        if proxy:
+            # Check if we have a cached session for this proxy
+            if proxy in self.proxy_sessions:
+                cached_session = self.proxy_sessions[proxy]
+                if not cached_session.closed:
+                    logger.debug(f"♻️ Reusing cached proxy session: {proxy}")
+                    return cached_session, False  # Reuse cached session
+                else:
+                    # Remove closed session from cache
+                    del self.proxy_sessions[proxy]
+            
+            # Create new session and cache it
+            logger.info(f"🌍 Creating proxy session: {proxy}")
+            try:
+                # Unlimited connections for maximum speed
+                connector = ProxyConnector.from_url(
+                    proxy,
+                    limit=0,  # Unlimited connections
+                    limit_per_host=0,  # Unlimited per host
+                    keepalive_timeout=60  # Keep connections alive longer
+                )
+                timeout = ClientTimeout(total=30)
+                session = ClientSession(timeout=timeout, connector=connector)
+                self.proxy_sessions[proxy] = session  # Cache the session
+                return session, False  # Don't close - it's cached for reuse
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to create proxy connector: {e}, falling back to direct")
+        
+        # Fallback to shared non-proxy session
+        return await self._get_session(), False
+
 
     async def get_extractor(self, url: str, request_headers: dict, host: str = None):
         """Ottiene l'estrattore appropriato per l'URL"""
@@ -437,22 +484,34 @@ class HLSProxy:
                             logger.error("❌ MPDToHLSConverter not available in legacy mode")
                             return web.Response(text="Legacy MPD converter not available", status=503)
                         
-                        # Fetch the MPD manifest
-                        session = await self._get_session()
-                        
-                        # Fix SSL Verification for legacy requests
+                        # Fetch the MPD manifest with proxy support
                         ssl_context = None
-                        if get_ssl_setting_for_url(stream_url, TRANSPORT_ROUTES):
+                        disable_ssl = get_ssl_setting_for_url(stream_url, TRANSPORT_ROUTES)
+                        if disable_ssl:
                             ssl_context = False
-
-                        async with session.get(stream_url, headers=stream_headers, ssl=ssl_context) as resp:
-                            if resp.status != 200:
-                                error_text = await resp.text()
-                                logger.error(f"❌ Failed to fetch MPD. Status: {resp.status}, URL: {stream_url}")
-                                logger.error(f"   Headers: {stream_headers}")
-                                logger.error(f"   Response: {error_text[:500]}") # Truncate for safety
-                                return web.Response(text=f"Failed to fetch MPD: {resp.status}\nResponse: {error_text[:1000]}", status=502)
-                            manifest_content = await resp.text()
+                        
+                        # Use helper to get proxy-enabled session
+                        mpd_session, should_close = await self._get_proxy_session(stream_url)
+                        final_mpd_url = stream_url  # Will be updated if redirected
+                        
+                        try:
+                            async with mpd_session.get(stream_url, headers=stream_headers, ssl=ssl_context, allow_redirects=True) as resp:
+                                # Capture final URL after redirects (use for segment URL construction)
+                                final_mpd_url = str(resp.url)
+                                if final_mpd_url != stream_url:
+                                    logger.info(f"↪️ MPD redirected to: {final_mpd_url}")
+                                
+                                if resp.status != 200:
+                                    error_text = await resp.text()
+                                    logger.error(f"❌ Failed to fetch MPD. Status: {resp.status}, URL: {stream_url}")
+                                    logger.error(f"   Headers: {stream_headers}")
+                                    logger.error(f"   Response: {error_text[:500]}") # Truncate for safety
+                                    return web.Response(text=f"Failed to fetch MPD: {resp.status}\nResponse: {error_text[:1000]}", status=502)
+                                manifest_content = await resp.text()
+                        finally:
+                            # Close the session if we created one for proxy
+                            if should_close and mpd_session and not mpd_session.closed:
+                                await mpd_session.close()
                         
                         # Build proxy base URL
                         scheme = request.headers.get('X-Forwarded-Proto', request.scheme)
@@ -511,13 +570,15 @@ class HLSProxy:
                         converter = MPDToHLSConverter()
                         if rep_id:
                             # Generate media playlist for specific representation
+                            # Use final_mpd_url (after redirects) for segment URL construction
                             hls_content = converter.convert_media_playlist(
-                                manifest_content, rep_id, proxy_base, stream_url, params, clearkey_param
+                                manifest_content, rep_id, proxy_base, final_mpd_url, params, clearkey_param
                             )
                         else:
                             # Generate master playlist
+                            # Use final_mpd_url (after redirects) for segment URL construction
                             hls_content = converter.convert_master_playlist(
-                                manifest_content, proxy_base, stream_url, params
+                                manifest_content, proxy_base, final_mpd_url, params
                             )
                         
                         return web.Response(
@@ -1520,7 +1581,7 @@ class HLSProxy:
             # Check for data presence regardless of return code (workaround for asyncio race condition on some platforms)
             if len(stdout) > 0:
                 if proc.returncode != 0:
-                    logger.warning(f"⚠️ FFmpeg remux finished with code {proc.returncode} but produced output (ignoring error). Stderr: {stderr.decode()[:200]}")
+                    logger.debug(f"FFmpeg remux finished with code {proc.returncode} but produced output (ignoring). Stderr: {stderr.decode()[:200]}")
                 return stdout
             
             if proc.returncode != 0:
@@ -1581,31 +1642,47 @@ class HLSProxy:
                     header_name = param_name[2:].replace('_', '-')
                     headers[header_name] = param_value
 
-            session = await self._get_session()
+            # Get proxy-enabled session for segment fetches
+            segment_session, should_close = await self._get_proxy_session(url)
 
-            # Parallel download of init and media segment
-            async def fetch_init():
-                if not init_url:
-                    return b""
-                if init_url in self.init_cache:
-                    return self.init_cache[init_url]
-                disable_ssl = get_ssl_setting_for_url(init_url, TRANSPORT_ROUTES)
-                async with session.get(init_url, headers=headers, ssl=not disable_ssl, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    if resp.status == 200:
-                        content = await resp.read()
-                        self.init_cache[init_url] = content
-                        return content
-                    return None
+            try:
+                # Parallel download of init and media segment
+                async def fetch_init():
+                    if not init_url:
+                        return b""
+                    if init_url in self.init_cache:
+                        return self.init_cache[init_url]
+                    disable_ssl = get_ssl_setting_for_url(init_url, TRANSPORT_ROUTES)
+                    try:
+                        async with segment_session.get(init_url, headers=headers, ssl=not disable_ssl, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                            if resp.status == 200:
+                                content = await resp.read()
+                                self.init_cache[init_url] = content
+                                return content
+                            logger.error(f"❌ Init segment returned status {resp.status}: {init_url}")
+                            return None
+                    except Exception as e:
+                        logger.error(f"❌ Failed to fetch init segment: {e}")
+                        return None
 
-            async def fetch_segment():
-                disable_ssl = get_ssl_setting_for_url(url, TRANSPORT_ROUTES)
-                async with session.get(url, headers=headers, ssl=not disable_ssl, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                    if resp.status == 200:
-                        return await resp.read()
-                    return None
+                async def fetch_segment():
+                    disable_ssl = get_ssl_setting_for_url(url, TRANSPORT_ROUTES)
+                    try:
+                        async with segment_session.get(url, headers=headers, ssl=not disable_ssl, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                            if resp.status == 200:
+                                return await resp.read()
+                            logger.error(f"❌ Segment returned status {resp.status}: {url}")
+                            return None
+                    except Exception as e:
+                        logger.error(f"❌ Failed to fetch segment: {e}")
+                        return None
 
-            # Parallel fetch
-            init_content, segment_content = await asyncio.gather(fetch_init(), fetch_segment())
+                # Parallel fetch
+                init_content, segment_content = await asyncio.gather(fetch_init(), fetch_segment())
+            finally:
+                # Close the session if we created one for proxy
+                if should_close and segment_session and not segment_session.closed:
+                    await segment_session.close()
             
             if init_content is None and init_url:
                 logger.error(f"❌ Failed to fetch init segment")
@@ -1777,6 +1854,12 @@ class HLSProxy:
         try:
             if self.session and not self.session.closed:
                 await self.session.close()
+            
+            # Close all cached proxy sessions
+            for proxy_url, session in list(self.proxy_sessions.items()):
+                if session and not session.closed:
+                    await session.close()
+            self.proxy_sessions.clear()
                 
             for extractor in self.extractors.values():
                 if hasattr(extractor, 'close'):

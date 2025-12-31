@@ -13,6 +13,13 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
+# Silenzia il warning asyncio "Unknown child process pid" (race condition nota in asyncio)
+class AsyncioWarningFilter(logging.Filter):
+    def filter(self, record):
+        return "Unknown child process pid" not in record.getMessage()
+
+logging.getLogger('asyncio').addFilter(AsyncioWarningFilter())
+
 # Silenzia i log di accesso di aiohttp a meno che non siano errori
 # logging.getLogger('aiohttp.access').setLevel(logging.ERROR)
 

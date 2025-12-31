@@ -7,7 +7,7 @@ from typing import Dict, Any
 import random
 import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
-from aiohttp_proxy import ProxyConnector
+from aiohttp_socks import ProxyConnector
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +47,8 @@ class VixSrcExtractor:
                 connector = ProxyConnector.from_url(proxy)
             else:
                 connector = TCPConnector(
-                    limit=10,
-                    limit_per_host=3,
+                    limit=0,
+                    limit_per_host=0,
                     keepalive_timeout=30,
                     enable_cleanup_closed=True,
                     force_close=False,

@@ -3,7 +3,7 @@ import logging
 import time
 import aiohttp
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
-from aiohttp_proxy import ProxyConnector
+from aiohttp_socks import ProxyConnector
 from typing import Optional, Dict, Any
 import random
 
@@ -37,8 +37,8 @@ class VavooExtractor:
                 connector = ProxyConnector.from_url(proxy)
             else:
                 connector = TCPConnector(
-                    limit=20,
-                    limit_per_host=10,
+                    limit=0,
+                    limit_per_host=0,
                     keepalive_timeout=60,
                     enable_cleanup_closed=True,
                     force_close=False,
