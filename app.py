@@ -9,7 +9,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from services.hls_proxy import HLSProxy
 from services.ffmpeg_manager import FFmpegManager
-from config import PORT
+from config import PORT, DVR_ENABLED, RECORDINGS_DIR, MAX_RECORDING_DURATION, RECORDINGS_RETENTION_DAYS
+
+# Only import DVR components if enabled
+if DVR_ENABLED:
+    from services.recording_manager import RecordingManager
+    from routes.recordings import setup_recording_routes
 
 # Configurazione logging (già configurata in config.py ma utile per il main)
 logging.basicConfig(
@@ -22,15 +27,24 @@ def create_app():
     """Crea e configura l'applicazione aiohttp."""
     # Start proxy and ffmpeg manager
     ffmpeg_manager = FFmpegManager()
-    
+
     # Clean up any leftover processes on start
     # asyncio.create_task(ffmpeg_manager.cleanup_loop()) # Should be started in on_startup
-    
+
     proxy = HLSProxy(ffmpeg_manager=ffmpeg_manager)
-    
+
     app = web.Application()
     app['ffmpeg_manager'] = ffmpeg_manager # Make accessible for routes
     app.ffmpeg_manager = ffmpeg_manager # Hack for access in route handler above function
+
+    # Initialize recording manager for DVR functionality (only if enabled)
+    if DVR_ENABLED:
+        recording_manager = RecordingManager(
+            recordings_dir=RECORDINGS_DIR,
+            max_duration=MAX_RECORDING_DURATION,
+            retention_days=RECORDINGS_RETENTION_DAYS
+        )
+        app['recording_manager'] = recording_manager
     
     # Registra le route
     app.router.add_get('/', proxy.handle_root)
@@ -155,6 +169,10 @@ def create_app():
 
     # ✅ NUOVO: Endpoint per ottenere l'IP pubblico
     app.router.add_get('/proxy/ip', proxy.handle_proxy_ip)
+
+    # Setup recording/DVR routes (only if enabled)
+    if DVR_ENABLED:
+        setup_recording_routes(app, recording_manager)
     
     # Gestore OPTIONS generico per CORS
     app.router.add_route('OPTIONS', '/{tail:.*}', proxy.handle_options)
@@ -165,7 +183,14 @@ def create_app():
     
     async def on_startup(app):
         asyncio.create_task(ffmpeg_manager.cleanup_loop())
+        if DVR_ENABLED:
+            asyncio.create_task(recording_manager.cleanup_loop())
     app.on_startup.append(on_startup)
+
+    async def on_shutdown(app):
+        if DVR_ENABLED:
+            await recording_manager.shutdown()
+    app.on_shutdown.append(on_shutdown)
     
     return app
 
@@ -186,6 +211,7 @@ def main():
     print("   • / - Pagina principale")
     print("   • /builder - Interfaccia web per il builder di playlist")
     print("   • /info - Pagina con informazioni sul server")
+    print("   • /recordings - DVR/Recording interface")
     print("   • /proxy/manifest.m3u8?url=<URL> - Proxy principale per stream")
     print("   • /playlist?url=<definizioni> - Generatore di playlist")
     print("=" * 50)

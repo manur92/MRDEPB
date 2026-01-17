@@ -1160,8 +1160,9 @@ class HLSProxy:
                         original_channel_url = request.query.get('url', '')
                         
                         api_password = request.query.get('api_password')
+                        no_bypass = request.query.get('no_bypass') == '1'
                         rewritten_manifest = await ManifestRewriter.rewrite_manifest_urls(
-                            manifest_content, stream_url, proxy_base, headers, original_channel_url, api_password, self.get_extractor
+                            manifest_content, stream_url, proxy_base, headers, original_channel_url, api_password, self.get_extractor, no_bypass
                         )
                         
                         return web.Response(

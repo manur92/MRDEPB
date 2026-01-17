@@ -17,8 +17,7 @@ class FFmpegManager:
         self.active_streams: Dict[str, str] = {} # url_hash -> full_url
         
         # Ensure temp directory exists
-        if not os.path.exists(self.temp_dir):
-            os.makedirs(self.temp_dir)
+        os.makedirs(self.temp_dir, exist_ok=True)
             
         # Start cleanup task (needs to be scheduled in loop)
         # We'll do lazy cleanup on access for simplicity or rely on external loop calling cleanup()

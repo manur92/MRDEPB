@@ -669,6 +669,68 @@
             outline: 2px solid var(--accent-primary);
             outline-offset: 2px;
         }
+
+        /* Table Styles for API Reference */
+        .api-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin: var(--spacing-md) 0 var(--spacing-xl) 0;
+            font-size: 0.9rem;
+        }
+
+        .api-table th {
+            text-align: left;
+            padding: var(--spacing-md);
+            background: var(--surface-elevated);
+            color: var(--text-primary);
+            font-weight: 600;
+            border-bottom: 2px solid var(--border-primary);
+        }
+
+        .api-table td {
+            text-align: left;
+            padding: var(--spacing-md);
+            border-bottom: 1px solid var(--border-primary);
+            color: var(--text-secondary);
+            vertical-align: top;
+        }
+
+        .api-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .api-table tr:hover td {
+            background: var(--surface-glass);
+            color: var(--text-primary);
+        }
+
+        .method-tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .method-get {
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .method-post {
+            background: rgba(16, 185, 129, 0.2);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .method-delete {
+            background: rgba(239, 68, 68, 0.2);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
     </style>
 </head>
 
@@ -793,6 +855,33 @@
                             <span>Headers ottimizzati per lo streaming</span>
                         </li>
                     </ul>
+                </div>
+
+                <!-- DVR Endpoint -->
+                <div class="endpoint-card">
+                    <div class="endpoint-header">
+                        <span class="endpoint-method">GET</span>
+                        <code class="endpoint-path">/record?url=&lt;STREAM_URL&gt;</code>
+                    </div>
+                    <p class="endpoint-description">
+                        Avvia la registrazione e ridirige allo stream live (DVR).
+                    </p>
+                    <ul class="feature-list">
+                        <li class="feature-item">
+                            <span class="feature-bullet">•</span>
+                            <span>Registra mentre guardi</span>
+                        </li>
+                        <li class="feature-item">
+                            <span class="feature-bullet">•</span>
+                            <span>Supporto nomi e durata (opzionali)</span>
+                        </li>
+                        <li class="feature-item">
+                            <span class="feature-bullet">•</span>
+                            <span>Gestione completa via <a href="/recordings"
+                                    style="color: var(--text-link);">/recordings</a></span>
+                        </li>
+                    </ul>
+                    <div class="example-block">/record?url=https://stream.m3u8&name=LiveTV&duration=3600</div>
                 </div>
 
                 <!-- HLS Proxy -->
@@ -1208,6 +1297,210 @@
                         <span><strong>h_*</strong> - Qualsiasi header personalizzato</span>
                     </li>
                 </ul>
+            </section>
+
+            <!-- Reference API Completa -->
+            <section class="section-card">
+                <h2 class="section-title">
+                    <div class="section-icon">📚</div>
+                    Reference API Completa
+                </h2>
+                <p class="endpoint-description">Elenco completo di tutti gli endpoint disponibili nel server.</p>
+
+                <!-- System & Public -->
+                <h3 style="color: var(--text-primary); margin: var(--spacing-lg) 0 var(--spacing-sm) 0;">🏠 System &
+                    Public</h3>
+                <table class="api-table">
+                    <thead>
+                        <tr>
+                            <th width="100">Metodo</th>
+                            <th>Endpoint</th>
+                            <th>Descrizione</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/</code></td>
+                            <td>Pagina principale con stato del server.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/info</code></td>
+                            <td>Pagina informativa dettagliata.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/builder</code></td>
+                            <td>Interfaccia Web Playlist Builder.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/api/info</code></td>
+                            <td>API JSON stato del server.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/proxy/ip</code></td>
+                            <td>Restituisce l'IP pubblico del server.</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <!-- Proxy & Streaming -->
+                <h3 style="color: var(--text-primary); margin: var(--spacing-lg) 0 var(--spacing-sm) 0;">📺 Proxy &
+                    Streaming</h3>
+                <table class="api-table">
+                    <thead>
+                        <tr>
+                            <th width="100">Metodo</th>
+                            <th>Endpoint</th>
+                            <th>Descrizione</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/proxy/manifest.m3u8</code></td>
+                            <td><strong>Entrypoint Principale</strong>. Auto-detect HLS/DASH.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/proxy/hls/manifest.m3u8</code></td>
+                            <td>Alias specifico per HLS.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/proxy/mpd/manifest.m3u8</code></td>
+                            <td>Forza input DASH (MPD) con conversione HLS.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/proxy/stream</code></td>
+                            <td>Proxy generico per file statici o progressivi.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/playlist</code></td>
+                            <td>Generatore playlist M3U dinamiche.</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <!-- Extractors -->
+                <h3 style="color: var(--text-primary); margin: var(--spacing-lg) 0 var(--spacing-sm) 0;">🔍 Extractors
+                </h3>
+                <table class="api-table">
+                    <thead>
+                        <tr>
+                            <th width="100">Metodo</th>
+                            <th>Endpoint</th>
+                            <th>Descrizione</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/extractor/video</code></td>
+                            <td>Estrae link e headers. Restituisce JSON o Redirect.</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <!-- Keys & DRM -->
+                <h3 style="color: var(--text-primary); margin: var(--spacing-lg) 0 var(--spacing-sm) 0;">🔐 Keys & DRM
+                </h3>
+                <table class="api-table">
+                    <thead>
+                        <tr>
+                            <th width="100">Metodo</th>
+                            <th>Endpoint</th>
+                            <th>Descrizione</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/license</code></td>
+                            <td>Proxy per licenze DRM (ClearKey/Widevine).</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-post">POST</span></td>
+                            <td><code>/license</code></td>
+                            <td>Proxy per licenze DRM (payload).</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/key</code></td>
+                            <td>Proxy per chiavi AES-128.</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <!-- DVR -->
+                <h3 style="color: var(--text-primary); margin: var(--spacing-lg) 0 var(--spacing-sm) 0;">📼 DVR
+                    (Registrazioni)</h3>
+                <table class="api-table">
+                    <thead>
+                        <tr>
+                            <th width="100">Metodo</th>
+                            <th>Endpoint</th>
+                            <th>Descrizione</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/recordings</code></td>
+                            <td><strong>Interfaccia Web</strong> gestione registrazioni.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/record</code></td>
+                            <td>Avvia rec e ridirige allo stream (Smart Mode).</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/api/recordings</code></td>
+                            <td>Lista tutte le registrazioni (JSON).</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/api/recordings/active</code></td>
+                            <td>Lista registrazioni in corso.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/api/recordings/{id}</code></td>
+                            <td>Dettagli registrazione.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-post">POST</span></td>
+                            <td><code>/api/recordings/start</code></td>
+                            <td>Avvia registrazione background.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-post">POST</span></td>
+                            <td><code>/api/recordings/{id}/stop</code></td>
+                            <td>Ferma registrazione attiva.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/api/recordings/{id}/stream</code></td>
+                            <td>Guarda registrazione (live/vod).</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-get">GET</span></td>
+                            <td><code>/api/recordings/{id}/download</code></td>
+                            <td>Scarica file video.</td>
+                        </tr>
+                        <tr>
+                            <td><span class="method-tag method-delete">DEL</span></td>
+                            <td><code>/api/recordings/{id}</code></td>
+                            <td>Cancella registrazione.</td>
+                        </tr>
+                    </tbody>
+                </table>
             </section>
 
             <!-- Playlist Builder -->

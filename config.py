@@ -123,6 +123,17 @@ if TRANSPORT_ROUTES: logging.info(f"🚦 Caricate {len(TRANSPORT_ROUTES)} regole
 API_PASSWORD = os.environ.get("API_PASSWORD")
 PORT = int(os.environ.get("PORT", 7860))
 
+# --- Recording/DVR Configuration ---
+DVR_ENABLED = os.environ.get("DVR_ENABLED", "false").lower() in ("true", "1", "yes")
+RECORDINGS_DIR = os.environ.get("RECORDINGS_DIR", "recordings")
+MAX_RECORDING_DURATION = int(os.environ.get("MAX_RECORDING_DURATION", 28800))  # 8 hours default
+RECORDINGS_RETENTION_DAYS = int(os.environ.get("RECORDINGS_RETENTION_DAYS", 7))  # Auto-cleanup after 7 days
+
+# Create recordings directory if DVR is enabled
+if DVR_ENABLED and not os.path.exists(RECORDINGS_DIR):
+    os.makedirs(RECORDINGS_DIR)
+    logging.info(f"📹 Created recordings directory: {RECORDINGS_DIR}")
+
 # MPD Processing Mode: 'ffmpeg' (transcoding) or 'legacy' (mpd_converter)
 MPD_MODE = os.environ.get("MPD_MODE", "legacy").lower()
 if MPD_MODE not in ("ffmpeg", "legacy"):
