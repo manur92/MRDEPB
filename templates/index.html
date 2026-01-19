@@ -1,5 +1,6 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -89,7 +90,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background: 
+            background:
                 radial-gradient(circle at 20% 50%, rgba(120, 119, 198, 0.3) 0%, transparent 50%),
                 radial-gradient(circle at 80% 20%, rgba(255, 119, 198, 0.3) 0%, transparent 50%),
                 radial-gradient(circle at 40% 80%, rgba(120, 219, 226, 0.3) 0%, transparent 50%);
@@ -98,9 +99,19 @@
         }
 
         @keyframes backgroundMove {
-            0%, 100% { transform: translateY(0) rotate(0deg); }
-            33% { transform: translateY(-30px) rotate(1deg); }
-            66% { transform: translateY(30px) rotate(-1deg); }
+
+            0%,
+            100% {
+                transform: translateY(0) rotate(0deg);
+            }
+
+            33% {
+                transform: translateY(-30px) rotate(1deg);
+            }
+
+            66% {
+                transform: translateY(30px) rotate(-1deg);
+            }
         }
 
         .container {
@@ -135,8 +146,15 @@
         }
 
         @keyframes gradientMove {
-            0%, 100% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
+
+            0%,
+            100% {
+                background-position: 0% 50%;
+            }
+
+            50% {
+                background-position: 100% 50%;
+            }
         }
 
         .hero-subtitle {
@@ -162,8 +180,17 @@
         }
 
         @keyframes pulse {
-            0%, 100% { transform: scale(1); box-shadow: var(--glow-primary); }
-            50% { transform: scale(1.02); box-shadow: var(--glow-secondary); }
+
+            0%,
+            100% {
+                transform: scale(1);
+                box-shadow: var(--glow-primary);
+            }
+
+            50% {
+                transform: scale(1.02);
+                box-shadow: var(--glow-secondary);
+            }
         }
 
         .status-dot {
@@ -176,8 +203,13 @@
         }
 
         @keyframes glow {
-            from { box-shadow: 0 0 10px var(--neon-green); }
-            to { box-shadow: 0 0 25px var(--neon-green), 0 0 35px var(--neon-green); }
+            from {
+                box-shadow: 0 0 10px var(--neon-green);
+            }
+
+            to {
+                box-shadow: 0 0 25px var(--neon-green), 0 0 35px var(--neon-green);
+            }
         }
 
         .features-grid {
@@ -324,6 +356,7 @@
                 opacity: 0;
                 transform: translateY(30px);
             }
+
             to {
                 opacity: 1;
                 transform: translateY(0);
@@ -335,10 +368,21 @@
             animation-fill-mode: both;
         }
 
-        .feature-card:nth-child(1) { animation-delay: 0.1s; }
-        .feature-card:nth-child(2) { animation-delay: 0.2s; }
-        .feature-card:nth-child(3) { animation-delay: 0.3s; }
-        .feature-card:nth-child(4) { animation-delay: 0.4s; }
+        .feature-card:nth-child(1) {
+            animation-delay: 0.1s;
+        }
+
+        .feature-card:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .feature-card:nth-child(3) {
+            animation-delay: 0.3s;
+        }
+
+        .feature-card:nth-child(4) {
+            animation-delay: 0.4s;
+        }
 
         /* Responsive */
         @media (max-width: 768px) {
@@ -376,40 +420,46 @@
         }
     </style>
 </head>
+
 <body>
     <div class="container">
         <div class="hero-section">
             <h1 class="hero-title">HLS Proxy Server</h1>
-            <p class="hero-subtitle">Server proxy avanzato per streaming HLS, IPTV e gestione playlist con supporto universale</p>
+            <p class="hero-subtitle">Advanced proxy server for HLS streaming, IPTV, and playlist management with
+                universal support</p>
             <div class="status-indicator">
                 <div class="status-dot"></div>
-                <span>Server Operativo</span>
+                <span>Server Operational</span>
             </div>
         </div>
 
         <div class="features-grid">
             <div class="feature-card">
                 <div class="feature-icon">🔄</div>
-                <h3 class="feature-title">Proxy Universale</h3>
-                <p class="feature-description">Supporto completo per HLS (.m3u8), playlist M3U, streaming MPD (DASH) e flussi DLHD dinamici con ottimizzazione automatica</p>
+                <h3 class="feature-title">Universal Proxy</h3>
+                <p class="feature-description">Complete support for HLS (.m3u8), M3U playlists, MPD (DASH) streaming,
+                    and dynamic DLHD flows with automatic optimization</p>
             </div>
 
             <div class="feature-card">
                 <div class="feature-icon">🎬</div>
-                <h3 class="feature-title">Estrazione Avanzata</h3>
-                <p class="feature-description">Risoluzione automatica di link Vavoo e DaddyLive HD con bypass delle restrizioni e autenticazione API integrata</p>
+                <h3 class="feature-title">Advanced Extraction</h3>
+                <p class="feature-description">Automatic resolution of Vavoo and DaddyLive HD links with restriction
+                    bypass and integrated API authentication</p>
             </div>
 
             <div class="feature-card">
                 <div class="feature-icon">📡</div>
                 <h3 class="feature-title">Playlist Builder</h3>
-                <p class="feature-description">Combina multiple playlist in un'unica fonte M3U8 con proxy integrato e compatibilità universale per tutti i player IPTV</p>
+                <p class="feature-description">Combine multiple playlists into a single M3U8 source with integrated
+                    proxy and universal compatibility for all IPTV players</p>
             </div>
 
             <div class="feature-card">
                 <div class="feature-icon">📹</div>
                 <h3 class="feature-title">DVR Recording</h3>
-                <p class="feature-description">Record live streams to local storage with TiVo-like functionality. Start, stop, and manage recordings with ease</p>
+                <p class="feature-description">Record live streams to local storage with TiVo-like functionality. Start,
+                    stop, and manage recordings with ease</p>
             </div>
         </div>
 
@@ -424,15 +474,15 @@
             </a>
             <a href="info" class="cta-button cta-secondary">
                 <span>📋</span>
-                <span>Documentazione</span>
+                <span>Documentation</span>
             </a>
         </div>
     </div>
 
     <script>
-        // Aggiungi effetti di interattività
-        document.addEventListener('DOMContentLoaded', function() {
-            // Effetto parallax leggero per le card
+        // Add interactive effects
+        document.addEventListener('DOMContentLoaded', function () {
+            // Light parallax effect for cards
             const cards = document.querySelectorAll('.feature-card');
 
             document.addEventListener('mousemove', (e) => {
@@ -447,16 +497,16 @@
                 });
             });
 
-            // Reset transform quando il mouse esce
+            // Reset transform when mouse leaves
             document.addEventListener('mouseleave', () => {
                 cards.forEach(card => {
                     card.style.transform = '';
                 });
             });
 
-            // Effetto click sulle card
+            // Click effect on cards
             cards.forEach(card => {
-                card.addEventListener('click', function() {
+                card.addEventListener('click', function () {
                     this.style.transform = 'scale(0.95)';
                     setTimeout(() => {
                         this.style.transform = '';
@@ -464,7 +514,7 @@
                 });
             });
 
-            // Animazione del gradiente del titolo al click
+            // Title gradient animation on click
             const title = document.querySelector('.hero-title');
             title.addEventListener('click', () => {
                 title.style.animationDuration = '0.5s';
@@ -475,4 +525,5 @@
         });
     </script>
 </body>
+
 </html>

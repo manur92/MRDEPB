@@ -83,7 +83,7 @@ class ManifestRewriter:
 
                     # Inietta ContentProtection
                     adaptation_sets = root.findall('.//mpd:AdaptationSet', ns)
-                    logger.info(f"🔎 Trovati {len(adaptation_sets)} AdaptationSet nel manifest.")
+                    logger.info(f"🔎 Found {len(adaptation_sets)} AdaptationSet in manifest.")
                     
                     for adaptation_set in adaptation_sets:
                         # RIMUOVI altri ContentProtection (es. Widevine)
@@ -91,7 +91,7 @@ class ManifestRewriter:
                             scheme = cp.get('schemeIdUri', '').lower()
                             if 'e2719d58-a985-b3c9-781a-007147f192ec' not in scheme:
                                 adaptation_set.remove(cp)
-                                logger.info(f"🗑️ Rimosso ContentProtection conflittuale: {scheme}")
+                                logger.info(f"🗑️ Removed conflicting ContentProtection: {scheme}")
 
                         # Verifica se esiste già ClearKey
                         existing_cp = False
@@ -102,10 +102,10 @@ class ManifestRewriter:
                         
                         if not existing_cp:
                             adaptation_set.insert(0, cp_element)
-                            logger.info(f"💉 Iniettato ContentProtection ClearKey statico in AdaptationSet")
+                            logger.info(f"💉 Injected static ClearKey ContentProtection in AdaptationSet")
 
                 except Exception as e:
-                    logger.error(f"❌ Errore nel parsing del parametro clearkey: {e}")
+                    logger.error(f"❌ Error parsing clearkey parameter: {e}")
 
             # --- GESTIONE PROXY LICENZE ESISTENTI ---
             for cp in root.findall('.//mpd:ContentProtection', ns):
@@ -134,7 +134,7 @@ class ManifestRewriter:
             return ET.tostring(root, encoding='unicode', method='xml')
 
         except Exception as e:
-            logger.error(f"❌ Errore durante la riscrittura del manifest MPD: {e}")
+            logger.error(f"❌ Error during MPD manifest rewrite: {e}")
             return manifest_content
 
     @staticmethod
@@ -155,10 +155,10 @@ class ManifestRewriter:
                 
                 if hasattr(extractor, 'is_vixsrc') and extractor.is_vixsrc:
                     is_vixsrc_stream = True
-                    logger.info("Rilevato stream VixSrc.")
+                    logger.info("Detected VixSrc stream.")
                 elif DLHDExtractor and isinstance(extractor, DLHDExtractor):
                     is_dlhd_stream = True
-                    logger.info(f"✅ Rilevato stream DLHD. Sarà proxato completamente.")
+                    logger.info(f"✅ Detected DLHD stream. Will be fully proxied.")
         except Exception as e:
             logger.error(f"Error in extractor detection: {e}")
             pass
@@ -175,7 +175,7 @@ class ManifestRewriter:
             
             if streams:
                 highest_quality_stream = max(streams, key=lambda x: x['bandwidth'])
-                logger.info(f"VixSrc: Selezionata bandwidth {highest_quality_stream['bandwidth']}.")
+                logger.info(f"VixSrc: Selected bandwidth {highest_quality_stream['bandwidth']}.")
                 
                 rewritten_lines.append('#EXTM3U')
                 for line in lines:

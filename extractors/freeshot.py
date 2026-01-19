@@ -1,5 +1,6 @@
 import logging
 import re
+import asyncio
 import urllib.parse
 from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp_socks import ProxyConnector
@@ -14,6 +15,9 @@ class FreeshotExtractor:
     Extractor per Freeshot (popcdn.day).
     Risolve l'URL iframe e restituisce l'm3u8 finale.
     """
+    MAX_RETRIES = 3
+    RETRY_DELAYS = [1, 2, 4]  # Exponential backoff in seconds
+    
     def __init__(self, request_headers, proxies=None):
         self.request_headers = request_headers
         self.base_headers = {
@@ -32,7 +36,7 @@ class FreeshotExtractor:
             #     proxy = self.proxies[0] # Simple logic
             #     connector = ProxyConnector.from_url(proxy)
             
-            timeout = ClientTimeout(total=15)
+            timeout = ClientTimeout(total=30)  # Increased timeout
             self.session = ClientSession(connector=connector, timeout=timeout)
         return self.session
 
@@ -65,49 +69,71 @@ class FreeshotExtractor:
         
         session = await self._get_session()
         
-        try:
-            async with session.get(target_url, headers=self.base_headers) as resp:
-                if resp.status != 200:
-                    raise ExtractorError(f"Freeshot request failed: {resp.status}")
-                body = await resp.text()
-            
-            # Nuova estrazione token via currentToken
-            match = re.search(r'currentToken:\s*["\']([^"\']+)["\']', body)
-            if not match:
-                # Fallback al vecchio metodo iframe
-                match = re.search(r'frameborder="0"\s+src="([^"]+)"', body, re.IGNORECASE)
-                if match:
-                    iframe_url = match.group(1)
-                    # Estrai token dall'iframe URL
-                    token_match = re.search(r'token=([^&]+)', iframe_url)
-                    if token_match:
-                        token = token_match.group(1)
-                    else:
-                        raise ExtractorError("Freeshot token not found in iframe")
+        # Retry logic with exponential backoff
+        last_error = None
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                async with session.get(target_url, headers=self.base_headers) as resp:
+                    if resp.status != 200:
+                        raise ExtractorError(f"Freeshot request failed: HTTP {resp.status}")
+                    body = await resp.text()
+                    break  # Success, exit retry loop
+            except asyncio.TimeoutError:
+                last_error = f"Request timeout after 30s (attempt {attempt + 1}/{self.MAX_RETRIES})"
+                logger.warning(f"FreeshotExtractor: {last_error}")
+                if attempt < self.MAX_RETRIES - 1:
+                    await asyncio.sleep(self.RETRY_DELAYS[attempt])
+                continue
+            except asyncio.CancelledError:
+                last_error = f"Request cancelled (attempt {attempt + 1}/{self.MAX_RETRIES})"
+                logger.warning(f"FreeshotExtractor: {last_error}")
+                if attempt < self.MAX_RETRIES - 1:
+                    await asyncio.sleep(self.RETRY_DELAYS[attempt])
+                continue
+            except Exception as e:
+                last_error = str(e) if str(e) else type(e).__name__
+                logger.warning(f"FreeshotExtractor: Request error: {last_error} (attempt {attempt + 1}/{self.MAX_RETRIES})")
+                if attempt < self.MAX_RETRIES - 1:
+                    await asyncio.sleep(self.RETRY_DELAYS[attempt])
+                continue
+        else:
+            # All retries exhausted
+            raise ExtractorError(f"Freeshot extraction failed after {self.MAX_RETRIES} attempts: {last_error}")
+        
+        # Token extraction (no need for try-except wrapper since ExtractorError propagates)
+        # Nuova estrazione token via currentToken
+        match = re.search(r'currentToken:\s*["\']([^"\']+)["\']', body)
+        if not match:
+            # Fallback al vecchio metodo iframe
+            match = re.search(r'frameborder="0"\s+src="([^"]+)"', body, re.IGNORECASE)
+            if match:
+                iframe_url = match.group(1)
+                # Estrai token dall'iframe URL
+                token_match = re.search(r'token=([^&]+)', iframe_url)
+                if token_match:
+                    token = token_match.group(1)
                 else:
-                    raise ExtractorError("Freeshot token/iframe not found")
+                    raise ExtractorError("Freeshot token not found in iframe")
             else:
-                token = match.group(1)
-            
-            # Nuovo formato URL m3u8: tracks-v1a1/mono.m3u8
-            m3u8_url = f"https://planetary.lovecdn.ru/{channel_code}/tracks-v1a1/mono.m3u8?token={token}"
-            
-            logger.info(f"FreeshotExtractor: Risolto -> {m3u8_url}")
-            
-            # Ritorniamo la struttura attesa da HLSProxy
-            return {
-                "destination_url": m3u8_url,
-                "request_headers": {
-                    "User-Agent": self.base_headers["User-Agent"],
-                    "Referer": "https://popcdn.day/",
-                    "Origin": "https://popcdn.day"
-                },
-                "mediaflow_endpoint": "hls_proxy"
-            }
-            
-        except Exception as e:
-            logger.error(f"FreeshotExtractor error: {e}")
-            raise ExtractorError(f"Freeshot extraction failed: {str(e)}")
+                raise ExtractorError("Freeshot token/iframe not found in page content")
+        else:
+            token = match.group(1)
+        
+        # Nuovo formato URL m3u8: tracks-v1a1/mono.m3u8
+        m3u8_url = f"https://planetary.lovecdn.ru/{channel_code}/tracks-v1a1/mono.m3u8?token={token}"
+        
+        logger.info(f"FreeshotExtractor: Risolto -> {m3u8_url}")
+        
+        # Ritorniamo la struttura attesa da HLSProxy
+        return {
+            "destination_url": m3u8_url,
+            "request_headers": {
+                "User-Agent": self.base_headers["User-Agent"],
+                "Referer": "https://popcdn.day/",
+                "Origin": "https://popcdn.day"
+            },
+            "mediaflow_endpoint": "hls_proxy"
+        }
 
     async def close(self):
         if self.session and not self.session.closed:

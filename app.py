@@ -204,16 +204,16 @@ def main():
         # Silenzia il logger di asyncio per evitare spam di ConnectionResetError
         logging.getLogger('asyncio').setLevel(logging.CRITICAL)
 
-    print("🚀 Avvio HLS Proxy Server...")
-    print(f"📡 Server disponibile su: http://localhost:{PORT}")
-    print(f"📡 Oppure: http://server-ip:{PORT}")
+    print("🚀 Starting HLS Proxy Server...")
+    print(f"📡 Server available at: http://localhost:{PORT}")
+    print(f"📡 Or: http://server-ip:{PORT}")
     print("🔗 Endpoints:")
-    print("   • / - Pagina principale")
-    print("   • /builder - Interfaccia web per il builder di playlist")
-    print("   • /info - Pagina con informazioni sul server")
+    print("   • / - Main page")
+    print("   • /builder - Web interface for playlist builder")
+    print("   • /info - Server information page")
     print("   • /recordings - DVR/Recording interface")
-    print("   • /proxy/manifest.m3u8?url=<URL> - Proxy principale per stream")
-    print("   • /playlist?url=<definizioni> - Generatore di playlist")
+    print("   • /proxy/manifest.m3u8?url=<URL> - Main stream proxy")
+    print("   • /playlist?url=<definitions> - Playlist generator")
     print("=" * 50)
     
     web.run_app(

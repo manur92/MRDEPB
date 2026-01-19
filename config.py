@@ -3,13 +3,24 @@ import logging
 import random
 from dotenv import load_dotenv
 
-load_dotenv() # Carica le variabili dal file .env
+load_dotenv() # Load variables from .env file
+
+# --- Log Level Configuration ---
+# Configurable via LOG_LEVEL env var: DEBUG, INFO, WARNING, ERROR, CRITICAL
+# Default: WARNING
+LOG_LEVEL_STR = os.environ.get("LOG_LEVEL", "WARNING").upper()
+LOG_LEVEL_MAP = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL
+}
+LOG_LEVEL = LOG_LEVEL_MAP.get(LOG_LEVEL_STR, logging.WARNING)
 
 # Configurazione logging
-# ✅ CORREZIONE: Imposta un formato standard e assicurati che il logger 'aiohttp.access'
-# non venga silenziato, permettendo la visualizzazione dei log di accesso.
 logging.basicConfig(
-    level=logging.INFO,
+    level=LOG_LEVEL,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
@@ -24,7 +35,7 @@ logging.getLogger('asyncio').addFilter(AsyncioWarningFilter())
 # logging.getLogger('aiohttp.access').setLevel(logging.ERROR)
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(LOG_LEVEL)
 
 # --- Configurazione Proxy ---
 def parse_proxies(proxy_env_var: str) -> list:
@@ -74,7 +85,7 @@ def parse_transport_routes() -> list:
                 })
 
     except Exception as e:
-        logger.warning(f"Errore nel parsing di TRANSPORT_ROUTES: {e}")
+        logger.warning(f"Error parsing TRANSPORT_ROUTES: {e}")
 
     return routes
 
@@ -117,8 +128,8 @@ GLOBAL_PROXIES = parse_proxies('GLOBAL_PROXY')
 TRANSPORT_ROUTES = parse_transport_routes()
 
 # Logging configurazione proxy
-if GLOBAL_PROXIES: logging.info(f"🌍 Caricati {len(GLOBAL_PROXIES)} proxy globali.")
-if TRANSPORT_ROUTES: logging.info(f"🚦 Caricate {len(TRANSPORT_ROUTES)} regole di trasporto.")
+if GLOBAL_PROXIES: logging.info(f"🌍 Loaded {len(GLOBAL_PROXIES)} global proxies.")
+if TRANSPORT_ROUTES: logging.info(f"🚦 Loaded {len(TRANSPORT_ROUTES)} transport rules.")
 
 API_PASSWORD = os.environ.get("API_PASSWORD")
 PORT = int(os.environ.get("PORT", 7860))
@@ -137,7 +148,7 @@ if DVR_ENABLED and not os.path.exists(RECORDINGS_DIR):
 # MPD Processing Mode: 'ffmpeg' (transcoding) or 'legacy' (mpd_converter)
 MPD_MODE = os.environ.get("MPD_MODE", "legacy").lower()
 if MPD_MODE not in ("ffmpeg", "legacy"):
-    logging.warning(f"⚠️ MPD_MODE '{MPD_MODE}' non valido. Uso 'legacy' come default.")
+    logging.warning(f"⚠️ MPD_MODE '{MPD_MODE}' is invalid. Using 'legacy' as default.")
     MPD_MODE = "legacy"
 logging.info(f"🎬 MPD Mode: {MPD_MODE}")
 

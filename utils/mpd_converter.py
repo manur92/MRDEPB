@@ -139,7 +139,7 @@ class MPDToHLSConverter:
             
             return '\n'.join(lines)
         except Exception as e:
-            logging.error(f"Errore conversione Master Playlist: {e}")
+            logging.error(f"Error converting Master Playlist: {e}")
             return "#EXTM3U\n#EXT-X-ERROR: " + str(e)
 
     def convert_media_playlist(self, manifest_content: str, rep_id: str, proxy_base: str, original_url: str, params: str, clearkey_param: str = None) -> str:
@@ -167,7 +167,7 @@ class MPDToHLSConverter:
                     break
             
             if representation is None:
-                logger.error(f"❌ Representation {rep_id} non trovata nel manifest.")
+                logger.error(f"❌ Representation {rep_id} not found in manifest.")
                 return "#EXTM3U\n#EXT-X-ERROR: Representation not found"
 
             # fMP4 richiede HLS versione 6 o 7, ma per .ts output usiamo v3 per compatibilità
@@ -221,7 +221,7 @@ class MPDToHLSConverter:
                         key_count = len(kids)
                         logger.info(f"🔐 ClearKey enabled - {key_count} key pair(s) for server-side decryption")
                 except Exception as e:
-                    logger.error(f"Errore parsing clearkey_param: {e}")
+                    logger.error(f"Error parsing clearkey_param: {e}")
 
             # --- Check for forced TS extension ---
             # If ext=ts is passed OR default, we force server side logic to remux to TS
@@ -418,7 +418,7 @@ class MPDToHLSConverter:
             return playlist_content
 
         except Exception as e:
-            logging.error(f"Errore conversione Media Playlist: {e}")
+            logging.error(f"Error converting Media Playlist: {e}")
             import traceback
             logging.error(traceback.format_exc())
             return "#EXTM3U\n#EXT-X-ERROR: " + str(e)

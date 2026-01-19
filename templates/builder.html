@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="en">
 
 <head>
     <meta charset="UTF-8">
@@ -627,18 +627,19 @@
     <div class="container">
         <div class="header">
             <h1 class="main-title">Playlist Builder</h1>
-            <p class="main-subtitle">Combina multiple playlist IPTV generando un link unificato per l'endpoint /playlist
+            <p class="main-subtitle">Combine multiple IPTV playlists generating a unified link for the /playlist
+                endpoint
             </p>
         </div>
 
         <div class="features-section">
             <div class="features-grid">
-                <div class="feature-badge">🔗 Link unificato /playlist</div>
-                <div class="feature-badge">🔧 Separazione automatica con ;</div>
-                <div class="feature-badge">📺 Formato compatibile con server</div>
-                <div class="feature-badge">🎯 Generazione istantanea</div>
-                <div class="feature-badge">🌐 Supporto URL multipli</div>
-                <div class="feature-badge">📋 Copia con un click</div>
+                <div class="feature-badge">🔗 Unified /playlist link</div>
+                <div class="feature-badge">🔧 Auto separation with ;</div>
+                <div class="feature-badge">📺 Server compatible format</div>
+                <div class="feature-badge">🎯 Instant generation</div>
+                <div class="feature-badge">🌐 Multiple URL support</div>
+                <div class="feature-badge">📋 One-click copy</div>
             </div>
         </div>
 
@@ -646,12 +647,12 @@
             <div class="left-panel">
                 <h2 class="section-title">
                     <span class="section-icon">📝</span>
-                    Configurazione Playlist
+                    Playlist Configuration
                 </h2>
 
                 <form id="playlistForm">
                     <div class="form-group">
-                        <label class="form-label">URL Playlist</label>
+                        <label class="form-label">Playlist URL</label>
                         <div class="input-group">
                             <input type="url" id="urlInput" class="form-input"
                                 placeholder="https://provider.com/playlist.m3u8" required>
@@ -660,26 +661,26 @@
                             </button>
                         </div>
                     </div>
-                    
+
                     <div class="form-group">
-                        <label class="form-label">API Password (Opzionale)</label>
+                        <label class="form-label">API Password (Optional)</label>
                         <div class="input-group">
                             <input type="password" id="apiPasswordInput" class="form-input"
-                                placeholder="Inserisci la password API se richiesta dal server">
+                                placeholder="Enter API password if required by the server">
                         </div>
                         <small style="color: var(--text-muted); display: block; margin-top: 5px;">
-                            Questa password verrà inclusa nel link generato e usata per autenticare le richieste.
+                            This password will be included in the generated link and used to authenticate requests.
                         </small>
                     </div>
                 </form>
 
                 <div class="form-group">
-                    <label class="form-label">Playlist Aggiunte</label>
+                    <label class="form-label">Added Playlists</label>
                     <div id="playlistList">
                         <div class="output-placeholder">
                             <div class="output-placeholder-icon">📋</div>
-                            <p>Nessuna playlist aggiunta</p>
-                            <small>Inserisci gli URL delle playlist e clicca ➕ per aggiungerli</small>
+                            <p>No playlists added</p>
+                            <small>Enter playlist URLs and click ➕ to add them</small>
                         </div>
                     </div>
                 </div>
@@ -687,7 +688,7 @@
                 <div class="form-group">
                     <button id="clearBtn" class="btn btn-secondary" style="width: 100%;">
                         <span>🗑️</span>
-                        <span>Pulisci Lista</span>
+                        <span>Clear List</span>
                     </button>
                 </div>
             </div>
@@ -696,7 +697,7 @@
                 <div class="output-section">
                     <h2 class="section-title">
                         <span class="section-icon">🔗</span>
-                        Link Generato
+                        Generated Link
                         <button id="copyBtn" class="btn btn-secondary btn-icon-only" style="margin-left: auto;"
                             disabled>
                             📋
@@ -708,8 +709,8 @@
                     <div class="output-content" id="outputContent">
                         <div class="output-placeholder">
                             <div class="output-placeholder-icon">🔗</div>
-                            <p>Il link combinato apparirà qui</p>
-                            <small>Inserisci gli URL delle playlist per creare il link</small>
+                            <p>The combined link will appear here</p>
+                            <small>Enter playlist URLs to create the link</small>
                         </div>
                     </div>
                 </div>
@@ -718,7 +719,7 @@
     </div>
 
     <div class="copy-notification" id="copyNotification">
-        ✅ Link copiato negli appunti!
+        ✅ Link copied to clipboard!
     </div>
 
     <script>
@@ -759,13 +760,13 @@
                 if (!url) return;
 
                 if (!this.isValidUrl(url)) {
-                    this.showNotification('❌ URL non valido', 'error');
+                    this.showNotification('❌ Invalid URL', 'error');
                     return;
                 }
 
                 // Check if URL already exists (check the url property of objects)
                 if (this.playlists.some(p => p.url === url)) {
-                    this.showNotification('⚠️ URL già presente nella lista', 'warning');
+                    this.showNotification('⚠️ URL already in the list', 'warning');
                     return;
                 }
 
@@ -779,7 +780,7 @@
                 this.updatePlaylistList();
                 this.generatePlaylistLink();
 
-                // Animazione di successo
+                // Success animation
                 this.addUrlBtn.classList.add('pulse-success');
                 setTimeout(() => {
                     this.addUrlBtn.classList.remove('pulse-success');
@@ -800,8 +801,8 @@
                     this.playlistList.innerHTML = `
                         <div class="output-placeholder">
                             <div class="output-placeholder-icon">📋</div>
-                            <p>Nessuna playlist aggiunta</p>
-                            <small>Inserisci gli URL delle playlist e clicca ➕ per aggiungerli</small>
+                            <p>No playlists added</p>
+                            <small>Enter playlist URLs and click ➕ to add them</small>
                         </div>
                     `;
                     return;
@@ -857,7 +858,7 @@
             }
 
             async simulateLoading() {
-                // Breve pausa per UX
+                // Short pause for UX
                 return new Promise(resolve => {
                     setTimeout(resolve, 800);
                 });
@@ -873,15 +874,15 @@
                 });
                 const urlString = encodedDefinitions.join(';');
                 const baseUrl = window.location.origin;
-                
+
                 let finalUrl = `${baseUrl}/playlist?url=${urlString}`;
-                
+
                 // Aggiungi api_password se presente
                 const apiPassword = this.apiPasswordInput.value.trim();
                 if (apiPassword) {
                     finalUrl += `&api_password=${encodeURIComponent(apiPassword)}`;
                 }
-                
+
                 return finalUrl;
             }
 
@@ -896,7 +897,7 @@
             setLoading(loading) {
                 this.loadingSpinner.style.display = loading ? 'block' : 'none';
                 if (loading) {
-                    this.outputContent.innerHTML = '<div class="output-placeholder"><div class="output-placeholder-icon">⏳</div><p>Generazione link in corso...</p></div>';
+                    this.outputContent.innerHTML = '<div class="output-placeholder"><div class="output-placeholder-icon">⏳</div><p>Generating link...</p></div>';
                 }
             }
 
@@ -910,13 +911,13 @@
                     await navigator.clipboard.writeText(link);
                     this.showCopyNotification();
 
-                    // Animazione del bottone
+                    // Button animation
                     this.copyBtn.classList.add('pulse-success');
                     setTimeout(() => {
                         this.copyBtn.classList.remove('pulse-success');
                     }, 600);
                 } catch (err) {
-                    // Fallback per browser che non supportano clipboard API
+                    // Fallback for browsers that don't support clipboard API
                     this.fallbackCopyTextToClipboard(link);
                 }
             }
@@ -935,7 +936,7 @@
                     document.execCommand('copy');
                     this.showCopyNotification();
                 } catch (err) {
-                    this.showNotification('❌ Impossibile copiare negli appunti', 'error');
+                    this.showNotification('❌ Could not copy to clipboard', 'error');
                 }
 
                 document.body.removeChild(textArea);
@@ -952,15 +953,15 @@
                 this.playlists = [];
                 this.updatePlaylistList();
                 this.resetOutput();
-                this.showNotification('🗑️ Lista playlist pulita', 'info');
+                this.showNotification('🗑️ Playlist list cleared', 'info');
             }
 
             resetOutput() {
                 this.outputContent.innerHTML = `
                     <div class="output-placeholder">
                         <div class="output-placeholder-icon">🔗</div>
-                        <p>Il link combinato apparirà qui</p>
-                        <small>Inserisci gli URL delle playlist e clicca "Genera Link" per creare il link unificato</small>
+                        <p>The combined link will appear here</p>
+                        <small>Enter playlist URLs and click "Generate Link" to create the unified link</small>
                     </div>
                 `;
                 this.copyBtn.disabled = true;
@@ -970,7 +971,7 @@
                 this.outputContent.innerHTML = `
                     <div class="output-placeholder">
                         <div class="output-placeholder-icon">❌</div>
-                        <p>Errore</p>
+                        <p>Error</p>
                         <small>${message}</small>
                     </div>
                 `;
@@ -978,17 +979,17 @@
             }
 
             showNotification(message, type = 'info') {
-                // Implementazione semplificata per ora
+                // Simplified implementation for now
                 console.log(`${type.toUpperCase()}: ${message}`);
             }
         }
 
-        // Inizializzazione
+        // Initialization
         const playlistBuilder = new PlaylistBuilder();
 
-        // Effetti di interattività aggiuntivi
+        // Additional interactive effects
         document.addEventListener('DOMContentLoaded', function () {
-            // Effetto hover sulle card
+            // Hover effect on cards
             const cards = document.querySelectorAll('.left-panel, .right-panel');
 
             cards.forEach(card => {
@@ -1001,7 +1002,7 @@
                 });
             });
 
-            // Animazione dei badge delle feature
+            // Feature badges animation
             const badges = document.querySelectorAll('.feature-badge');
             badges.forEach((badge, index) => {
                 badge.style.animationDelay = `${index * 0.1}s`;

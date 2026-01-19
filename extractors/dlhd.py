@@ -54,7 +54,7 @@ class DLHDExtractor:
         self.server_lookup_url = cache_data.get('server_lookup_url', 'https://chevy.kiko2.ru/server_lookup')
         self.base_domain = cache_data.get('base_domain', 'kiko2.ru')
         
-        logger.info(f"Hosts caricati all'avvio: {self.iframe_hosts}")
+        logger.info(f"Hosts loaded at startup: {self.iframe_hosts}")
         logger.info(f"Auth URL: {self.auth_url}")
         logger.info(f"Stream CDN Template: {self.stream_cdn_template}")
         logger.info(f"Stream Other Template: {self.stream_other_template}")
@@ -67,7 +67,7 @@ class DLHDExtractor:
         try:
             if os.path.exists(self.cache_file):
                 with open(self.cache_file, 'r', encoding='utf-8') as f:
-                    logger.info(f"💾 Caricamento cache dal file: {self.cache_file}")
+                    logger.info(f"💾 Loading cache from file: {self.cache_file}")
                     encoded_data = f.read()
                     if not encoded_data:
                          # Tenta di gestire il vecchio formato o ritorna default
@@ -83,7 +83,7 @@ class DLHDExtractor:
                              # Verifica euristica: se le chiavi sono stringhe numeriche, è il vecchio formato
                              is_old_format = any(k.isdigit() for k in data.keys())
                              if is_old_format or not data:
-                                 logger.info("Rilevato vecchio formato cache, conversione in corso...")
+                                 logger.info("Detected old cache format, converting...")
                                  return {'hosts': [], 'streams': data}
                         
                         return data
@@ -93,7 +93,7 @@ class DLHDExtractor:
                         return json.load(f)
 
         except (IOError, json.JSONDecodeError, Exception) as e:
-            logger.error(f"❌ Errore durante il caricamento della cache: {e}. Inizio con una cache vuota.")
+            logger.error(f"❌ Error loading cache: {e}. Starting with empty cache.")
         return {'hosts': [], 'streams': {}}
 
     def _get_random_proxy(self):
@@ -106,7 +106,7 @@ class DLHDExtractor:
             timeout = ClientTimeout(total=60, connect=30, sock_read=30)
             proxy = self._get_random_proxy()
             if proxy:
-                logger.info(f"🔗 Utilizzo del proxy {proxy} per la sessione DLHD.")
+                logger.info(f"🔗 Using proxy {proxy} for DLHD session.")
                 connector = ProxyConnector.from_url(proxy, ssl=False)
             else:
                 connector = TCPConnector(
@@ -117,7 +117,7 @@ class DLHDExtractor:
                     force_close=False,
                     use_dns_cache=True
                 )
-                logger.info("ℹ️ Nessun proxy specifico per DLHD, uso connessione diretta.")
+                logger.info("ℹ️ No specific proxy for DLHD, using direct connection.")
             # ✅ FONDAMENTALE: Cookie jar per mantenere sessione come browser reale
             self.session = ClientSession(
                 timeout=timeout,
@@ -145,9 +145,9 @@ class DLHDExtractor:
                 json_data = json.dumps(cache_data)
                 encoded_data = base64.b64encode(json_data.encode('utf-8')).decode('utf-8')
                 f.write(encoded_data)
-                logger.info(f"💾 Cache (stream + hosts) salvata con successo.")
+                logger.info(f"💾 Cache (stream + hosts) saved successfully.")
         except IOError as e:
-            logger.error(f"❌ Errore durante il salvataggio della cache: {e}")
+            logger.error(f"❌ Error saving cache: {e}")
 
     async def _fetch_iframe_hosts(self) -> bool:
         """Scarica la lista aggiornata degli host iframe."""
@@ -155,7 +155,7 @@ class DLHDExtractor:
         encoded_url = "aHR0cHM6Ly9pZnJhbWUuZGxoZC5kcGRucy5vcmcv"
         url = base64.b64decode(encoded_url).decode('utf-8')
         
-        logger.info(f"🔄 Aggiornamento lista host iframe...")
+        logger.info(f"🔄 Updating iframe host list...")
         try:
             session = await self._get_session()
             async with session.get(url, ssl=False, timeout=ClientTimeout(total=10)) as response:
@@ -189,15 +189,15 @@ class DLHDExtractor:
                     
                     if new_hosts:
                         self.iframe_hosts = new_hosts
-                        logger.info(f"✅ Lista host aggiornata: {self.iframe_hosts}")
+                        logger.info(f"✅ Host list updated: {self.iframe_hosts}")
                         self._save_cache()
                         return True
                     else:
-                         logger.warning("⚠️ Lista host scaricata ma vuota.")
+                         logger.warning("⚠️ Host list downloaded but empty.")
                 else:
-                    logger.error(f"❌ Errore HTTP {response.status} durante aggiornamento host iframe.")
+                    logger.error(f"❌ HTTP error {response.status} while updating iframe host.")
         except Exception as e:
-            logger.error(f"❌ Eccezione durante aggiornamento host iframe: {e}")
+            logger.error(f"❌ Exception while updating iframe host: {e}")
         
         return False
 
@@ -227,7 +227,7 @@ class DLHDExtractor:
         
         try:
             if content_encoding == 'zstd':
-                logger.info(f"Rilevata compressione zstd per {response.url}. Decompressione in corso...")
+                logger.info(f"Detected zstd compression for {response.url}. Decompressing...")
                 try:
                     dctx = zstandard.ZstdDecompressor()
                     # ✅ MODIFICA: Utilizza stream_reader per gestire frame senza dimensione del contenuto.
@@ -236,14 +236,14 @@ class DLHDExtractor:
                         decompressed_body = reader.read()
                     return decompressed_body.decode(response.charset or 'utf-8')
                 except zstandard.ZstdError as e:
-                    logger.error(f"Errore di decompressione Zstd: {e}. Il contenuto potrebbe essere incompleto o corrotto.")
+                    logger.error(f"Zstd decompression error: {e}. Content may be incomplete or corrupted.")
                     raise ExtractorError(f"Fallimento decompressione zstd: {e}")
             elif content_encoding == 'gzip':
-                logger.info(f"Rilevata compressione gzip per {response.url}. Decompressione in corso...")
+                logger.info(f"Detected gzip compression for {response.url}. Decompressing...")
                 decompressed_body = gzip.decompress(raw_body)
                 return decompressed_body.decode(response.charset or 'utf-8')
             elif content_encoding == 'deflate':
-                logger.info(f"Rilevata compressione deflate per {response.url}. Decompressione in corso...")
+                logger.info(f"Detected deflate compression for {response.url}. Decompressing...")
                 decompressed_body = zlib.decompress(raw_body)
                 return decompressed_body.decode(response.charset or 'utf-8')
             else:
@@ -251,8 +251,8 @@ class DLHDExtractor:
                 # ✅ FIX: Usa 'errors=replace' per evitare crash su byte non validi
                 return raw_body.decode(response.charset or 'utf-8', errors='replace')
         except Exception as e:
-            logger.error(f"Errore durante la decompressione/decodifica del contenuto da {response.url}: {e}")
-            raise ExtractorError(f"Fallimento decompressione per {response.url}: {e}")
+            logger.error(f"Error during decompression/decoding of content from {response.url}: {e}")
+            raise ExtractorError(f"Decompression failure for {response.url}: {e}")
 
     async def _make_robust_request(self, url: str, headers: dict = None, retries=3, initial_delay=2):
         """✅ Richieste con sessione persistente per evitare anti-bot"""
@@ -266,7 +266,7 @@ class DLHDExtractor:
                 # ✅ IMPORTANTE: Riusa sempre la stessa sessione
                 session = await self._get_session()
                 
-                logger.info(f"Tentativo {attempt + 1}/{retries} per URL: {url}")
+                logger.info(f"Attempt {attempt + 1}/{retries} for URL: {url}")
                 async with session.get(url, headers=final_headers, ssl=False, auto_decompress=False) as response:
                     response.raise_for_status()
                     content = await self._handle_response_content(response)
@@ -292,7 +292,7 @@ class DLHDExtractor:
                         async def json(self):
                             return json.loads(self._text)
                     
-                    logger.info(f"✅ Richiesta riuscita per {url} al tentativo {attempt + 1}")
+                    logger.info(f"✅ Request successful for {url} at attempt {attempt + 1}")
                     return MockResponse(content, response.status, response.headers)
                     
             except (
@@ -303,7 +303,7 @@ class DLHDExtractor:
                 OSError,
                 ConnectionResetError,
             ) as e:
-                logger.warning(f"⚠️ Errore connessione tentativo {attempt + 1} per {url}: {str(e)}")
+                logger.warning(f"⚠️ Connection error attempt {attempt + 1} for {url}: {str(e)}")
                 
                 # ✅ Solo in caso di errore critico, chiudi la sessione
                 if attempt == retries - 1:
@@ -316,19 +316,19 @@ class DLHDExtractor:
                 
                 if attempt < retries - 1:
                     delay = initial_delay * (2 ** attempt)
-                    logger.info(f"⏳ Aspetto {delay} secondi prima del prossimo tentativo...")
+                    logger.info(f"⏳ Waiting {delay} seconds before next attempt...")
                     await asyncio.sleep(delay)
                 else:
-                    raise ExtractorError(f"Tutti i {retries} tentativi falliti per {url}: {str(e)}")
+                    raise ExtractorError(f"All {retries} attempts failed for {url}: {str(e)}")
                     
             except Exception as e:
                 # Controlla se l'errore è dovuto a zstd e logga un messaggio specifico
                 if 'zstd' in str(e).lower():
-                    logger.critical(f"❌ Errore critico con la decompressione zstd. Assicurati che la libreria 'zstandard' sia installata (`pip install zstandard`). Errore: {e}")
+                    logger.critical(f"❌ Critical error with zstd decompression. Ensure 'zstandard' library is installed (`pip install zstandard`). Error: {e}")
                 else: # type: ignore
-                    logger.error(f"❌ Errore non di rete tentativo {attempt + 1} per {url}: {str(e)}")
+                    logger.error(f"❌ Non-network error attempt {attempt + 1} for {url}: {str(e)}")
                 if attempt == retries - 1:
-                    raise ExtractorError(f"Errore finale per {url}: {str(e)}")
+                    raise ExtractorError(f"Final error for {url}: {str(e)}")
         await asyncio.sleep(initial_delay)
 
     async def extract(self, url: str, force_refresh: bool = False, **kwargs) -> Dict[str, Any]:
@@ -343,7 +343,7 @@ class DLHDExtractor:
             for iframe_host in hosts_to_try:
                 try:
                     iframe_url = f'https://{iframe_host}/premiumtv/daddyhd.php?id={channel_id}'
-                    logger.info(f"🔍 Tentativo estrazione da: {iframe_url}")
+                    logger.info(f"🔍 Attempting extraction from: {iframe_url}")
                     
                     embed_headers = {
                         'User-Agent': user_agent,
@@ -380,7 +380,7 @@ class DLHDExtractor:
                     
                     missing_params = [k for k, v in params.items() if not v]
                     if missing_params:
-                        logger.warning(f"⚠️ Parametri mancanti da {iframe_host}: {missing_params}. Tentativo con nuovo flusso euristico...")
+                        logger.warning(f"⚠️ Missing parameters from {iframe_host}: {missing_params}. Attempting new heuristic flow...")
                         try:
                             # Se mancano i parametri standard, prova il nuovo flusso euristico/obfuscated
                             result = await self._extract_new_auth_flow(iframe_url, js_content, embed_headers)
@@ -390,12 +390,12 @@ class DLHDExtractor:
                             last_error = ExtractorError(f"Missing params: {missing_params} and New Flow failed")
                             continue
                     
-                    logger.info(f"✅ Parametri estratti: channel_key={params['channel_key']}")
+                    logger.info(f"✅ Parameters extracted: channel_key={params['channel_key']}")
                     
                     # Step 3: Auth POST
                     # ✅ DINAMICO: usa self.auth_url completo
                     auth_url = self.auth_url
-                    logger.info(f"🔐 Usando auth_url: {auth_url}")
+                    logger.info(f"🔐 Using auth_url: {auth_url}")
                     iframe_origin = f"https://{iframe_host}"
                     
                     form_data = FormData()
@@ -458,7 +458,7 @@ class DLHDExtractor:
                             last_error = ExtractorError(f"Auth response not JSON: {auth_text}")
                             continue
                     
-                    logger.info("✅ Auth riuscito!")
+                    logger.info("✅ Auth successful!")
                     
                     # ✅ DEBUG: Log cookies e headers dalla risposta auth
                     auth_cookies = auth_resp.cookies
@@ -504,14 +504,14 @@ class DLHDExtractor:
                     }
                     
                     try:
-                        logger.info(f"💓 Invio heartbeat a: {heartbeat_url}")
+                        logger.info(f"💓 Sending heartbeat to: {heartbeat_url}")
                         async with session.get(heartbeat_url, headers=heartbeat_headers, ssl=False, timeout=ClientTimeout(total=10)) as hb_resp:
                             hb_text = await hb_resp.text()
                             logger.info(f"💓 Heartbeat response: {hb_resp.status} - {hb_text[:100]}")
                             if hb_resp.status != 200:
                                 logger.warning(f"⚠️ Heartbeat non-200: {hb_resp.status}")
                     except Exception as hb_e:
-                        logger.warning(f"⚠️ Heartbeat fallito: {hb_e}")
+                        logger.warning(f"⚠️ Heartbeat failed: {hb_e}")
                         # Non blocchiamo l'estrazione se il heartbeat fallisce
                     
                     # Step 6: Build final URL
@@ -526,7 +526,7 @@ class DLHDExtractor:
                         # Usa stream_other_template (es: https://{SERVER_KEY}new.giokko.ru/{SERVER_KEY}/{CHANNEL}/mono.css)
                         stream_url = self.stream_other_template.replace('{SERVER_KEY}', server_key).replace('{CHANNEL}', channel_key)
                     
-                    logger.info(f"✅ Stream URL costruito: {stream_url}")
+                    logger.info(f"✅ Stream URL built: {stream_url}")
                     
                     # ✅ Genera X-Client-Token (richiesto dal provider per heartbeat/chiavi)
                     # Formula: btoa(CHANNEL_KEY|AUTH_COUNTRY|AUTH_TS|UA|fingerprint)
@@ -539,7 +539,7 @@ class DLHDExtractor:
                     fingerprint = f"{user_agent}|{screen_res}|{timezone}|{lang}"
                     sign_data = f"{channel_key}|{auth_country}|{auth_ts}|{user_agent}|{fingerprint}"
                     client_token = base64.b64encode(sign_data.encode('utf-8')).decode('utf-8')
-                    logger.info(f"🔐 X-Client-Token generato per channel {channel_key}")
+                    logger.info(f"🔐 X-Client-Token generated for channel {channel_key}")
                     
                     stream_headers = {
                         'User-Agent': user_agent,
@@ -561,7 +561,7 @@ class DLHDExtractor:
                         cookie_str = "; ".join([f"{k}={v.value}" for k, v in cookies.items()])
                         if cookie_str:
                             stream_headers['Cookie'] = cookie_str
-                            logger.info(f"🍪 Cookies aggiunti agli headers: {cookie_str[:50]}...")
+                            logger.info(f"🍪 Cookies added to headers: {cookie_str[:50]}...")
 
                     expires_at = None
                     try:
@@ -582,11 +582,11 @@ class DLHDExtractor:
                     }
                     
                 except Exception as e:
-                    logger.warning(f"⚠️ Errore con {iframe_host}: {e}")
+                    logger.warning(f"⚠️ Error with {iframe_host}: {e}")
                     last_error = e
                     continue
             
-            raise ExtractorError(f"Tutti gli host iframe hanno fallito. Ultimo errore: {last_error}")
+            raise ExtractorError(f"All iframe hosts failed. Last error: {last_error}")
 
         # Helper per estrarre ID (spostato fuori per pulizia scope)
         def extract_channel_id(u: str) -> Optional[str]:
@@ -608,13 +608,13 @@ class DLHDExtractor:
         try:
             channel_id = extract_channel_id(url)
             if not channel_id:
-                raise ExtractorError(f"Impossibile estrarre channel ID da {url}")
+                raise ExtractorError(f"Unable to extract channel ID from {url}")
 
-            logger.info(f"📺 Estrazione per canale ID: {channel_id}")
+            logger.info(f"📺 Extraction for channel ID: {channel_id}")
 
             # Controlla la cache prima di procedere
             if not force_refresh and channel_id in self._stream_data_cache:
-                logger.info(f"✅ Trovati dati in cache per il canale ID: {channel_id}. Verifico la validità...")
+                logger.info(f"✅ Found cached data for channel ID: {channel_id}. Verifying validity...")
                 cached_data = self._stream_data_cache[channel_id]
                 stream_url = cached_data.get("destination_url")
                 stream_headers = cached_data.get("request_headers", {})
@@ -624,7 +624,7 @@ class DLHDExtractor:
                 
                 # ✅ Check expiry first (con buffer di 30 secondi)
                 if expires_at and time.time() > (expires_at - 30):
-                     logger.warning(f"⚠️ Cache scaduta per il canale ID {channel_id} (expires_at: {expires_at}).")
+                     logger.warning(f"⚠️ Cache expired for channel ID {channel_id} (expires_at: {expires_at}).")
                      is_valid = False
                 elif stream_url:
                     try:
@@ -632,17 +632,17 @@ class DLHDExtractor:
                             async with validation_session.head(stream_url, headers=stream_headers, ssl=False) as response:
                                 if response.status == 200:
                                     is_valid = True
-                                    logger.info(f"✅ Cache per il canale ID {channel_id} è valida.")
+                                    logger.info(f"✅ Cache for channel ID {channel_id} is valid.")
                                 else:
-                                    logger.warning(f"⚠️ Cache per il canale ID {channel_id} non valida. Status: {response.status}. Procedo con estrazione.")
+                                    logger.warning(f"⚠️ Cache for channel ID {channel_id} not valid. Status: {response.status}. Proceeding with extraction.")
                     except Exception as e:
-                        logger.warning(f"⚠️ Errore durante la validazione della cache per {channel_id}: {e}. Procedo con estrazione.")
+                        logger.warning(f"⚠️ Error during cache validation for {channel_id}: {e}. Proceeding with extraction.")
                 
                 if not is_valid:
                     if channel_id in self._stream_data_cache:
                         del self._stream_data_cache[channel_id]
                     self._save_cache()
-                    logger.info(f"🗑️ Cache invalidata per il canale ID {channel_id}.")
+                    logger.info(f"🗑️ Cache invalidated for channel ID {channel_id}.")
                 else:
                     return cached_data
 
@@ -659,22 +659,22 @@ class DLHDExtractor:
                     
                     # Se è scaduta anche la nuova cache (improbabile ma possibile), procedi con estrazione
                     if expires_at and time.time() > (expires_at - 30):
-                        logger.info(f"⚠️ Cache (ricontrollata) scaduta per {channel_id}, procedo con nuova estrazione.")
+                        logger.info(f"⚠️ Cache (rechecked) expired for {channel_id}, proceeding with new extraction.")
                     else:
-                        logger.info(f"✅ Dati per il canale {channel_id} trovati in cache dopo aver atteso il lock.")
+                        logger.info(f"✅ Data for channel {channel_id} found in cache after waiting for lock.")
                         return self._stream_data_cache[channel_id]
 
                 # Procedi con l'estrazione diretta
                 # Procedi con l'estrazione diretta
-                logger.info(f"⚙️ Nessuna cache valida per {channel_id}, avvio estrazione diretta...")
+                logger.info(f"⚙️ No valid cache for {channel_id}, starting direct extraction...")
                 
                 try:
                     result = await get_stream_data_direct(channel_id, self.iframe_hosts)
                 except ExtractorError:
                     # Se fallisce con gli host correnti, prova ad aggiornarli
-                    logger.warning("⚠️ Tutti gli host correnti hanno fallito. Tento aggiornamento lista host...")
+                    logger.warning("⚠️ All current hosts failed. Attempting to update host list...")
                     if await self._fetch_iframe_hosts():
-                         logger.info(f"🔄 Riprovo con nuovi host: {self.iframe_hosts}")
+                         logger.info(f"🔄 Retrying with new hosts: {self.iframe_hosts}")
                          result = await get_stream_data_direct(channel_id, self.iframe_hosts)
                     else:
                         raise
@@ -689,10 +689,10 @@ class DLHDExtractor:
             # Per errori 403, non loggare il traceback perché sono errori attesi (servizio temporaneamente non disponibile)
             error_message = str(e)
             if "403" in error_message or "Forbidden" in error_message:
-                logger.error(f"Estrazione DLHD completamente fallita per URL {url}")
+                logger.error(f"DLHD extraction completely failed for URL {url}")
             else:
-                logger.exception(f"Estrazione DLHD completamente fallita per URL {url}")
-            raise ExtractorError(f"Estrazione DLHD completamente fallita: {str(e)}")
+                logger.exception(f"DLHD extraction completely failed for URL {url}")
+            raise ExtractorError(f"DLHD extraction completely failed: {str(e)}")
 
     async def _extract_lovecdn_stream(self, iframe_url: str, iframe_content: str, headers: dict) -> Dict[str, Any]:
         """
@@ -767,7 +767,7 @@ class DLHDExtractor:
     async def _extract_new_auth_flow(self, iframe_url: str, iframe_content: str, headers: dict) -> Dict[str, Any]:
         """Gestisce il nuovo flusso di autenticazione con estrazione euristica."""
         
-        logger.info("Tentativo rilevamento nuovo flusso auth obfuscated...")
+        logger.info("Attempting to detect new obfuscated auth flow...")
         
         # 1. Estrazione euristica delle variabili
         params = {}
@@ -776,7 +776,7 @@ class DLHDExtractor:
         jwt_match = re.search(r'["\'](eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+)["\']', iframe_content)
         if jwt_match:
             params['auth_token'] = jwt_match.group(1)
-            logger.info("✅ Trovato possibile JWT Token")
+            logger.info("✅ Found possible JWT Token")
             
         # Cerca Channel Key (es: premium853) - o stringa alfanumerica di media lunghezza
         # Spesso assegnata a una variabile corta
@@ -786,7 +786,7 @@ class DLHDExtractor:
             # Filtro euristico: deve sembrare una chiave canale (es. dad123, premium853, etc)
             if re.match(r'^(premium|dad|sport|live)[0-9]+$', val) or '853' in val: # Harcoded check per debug
                 params['channel_key'] = val
-                logger.info(f"✅ Trovata possibile Channel Key: {val}")
+                logger.info(f"✅ Found possible Channel Key: {val}")
                 break
                 
         # Cerca Country (2 lettere maiuscole)
@@ -810,19 +810,19 @@ class DLHDExtractor:
         
         # Validazione minima
         if not params.get('auth_token'):
-             raise ExtractorError("Impossibile estrarre JWT dal nuovo flusso.")
+             raise ExtractorError("Unable to extract JWT from new flow.")
              
         # Se manca channel key, prova a estrarla dall'URL
         if not params.get('channel_key'):
              # fallback da URL iframe o parametro passato
              pass # Gestito dal chiamante se fallisce qui
         
-        logger.info(f"✅ Parametri euristici estratti: {params}")
+        logger.info(f"✅ Heuristic parameters extracted: {params}")
 
         # 2. SKIP auth2.php POST - Il nuovo flusso usa direttamente il token nel heartbeat
         # L'errore "INVALID_TOKEN" su auth2.php suggerisce che quel passaggio è deprecato o rotto per questo flusso.
         
-        logger.info("🚀 Skipping auth2.php POST (nuovo flusso detectato). Procedo diretto al heartbeat.")
+        logger.info("🚀 Skipping auth2.php POST (new flow detected). Proceeding directly to heartbeat.")
         
         # 3. Server Lookup & Heartbeat Setup
         auth_token = params['auth_token']
@@ -837,9 +837,9 @@ class DLHDExtractor:
              if m_url:
                  # Spesso la key è 'premium' + id
                  channel_key = f"premium{m_url.group(1)}"
-                 logger.info(f"⚠️ Channel Key non trovata nel JS, indovinata dall'URL: {channel_key}")
+                 logger.info(f"⚠️ Channel Key not found in JS, guessed from URL: {channel_key}")
              else:
-                 raise ExtractorError("Channel Key mancante e non derivabile.")
+                 raise ExtractorError("Channel Key missing and not derivable.")
 
         # 4. Server Lookup
         user_agent = headers.get('User-Agent')
@@ -853,7 +853,7 @@ class DLHDExtractor:
             'Origin': iframe_origin,
         }
         
-        logger.info(f"🔍 Server Lookup su: {server_lookup_url}")
+        logger.info(f"🔍 Server Lookup on: {server_lookup_url}")
         lookup_resp = await self._make_robust_request(server_lookup_url, headers=lookup_headers, retries=2)
         server_data = await lookup_resp.json()
         server_key = server_data.get('server_key')
@@ -886,12 +886,12 @@ class DLHDExtractor:
         }
         
         try:
-            logger.info(f"💓 Invio heartbeat (diretto) a: {heartbeat_url}")
+            logger.info(f"💓 Sending heartbeat (direct) to: {heartbeat_url}")
             async with self.session.get(heartbeat_url, headers=heartbeat_headers, ssl=False, timeout=ClientTimeout(total=10)) as hb_resp:
                 hb_text = await hb_resp.text()
                 logger.info(f"💓 Heartbeat response: {hb_resp.status} - {hb_text[:100]}")
         except Exception as hb_e:
-            logger.warning(f"⚠️ Heartbeat fallito: {hb_e}")
+            logger.warning(f"⚠️ Heartbeat failed: {hb_e}")
             
         # 6. Build Stream URL
         if server_key == 'top1/cdn':
@@ -899,7 +899,7 @@ class DLHDExtractor:
         else:
             stream_url = self.stream_other_template.replace('{SERVER_KEY}', server_key).replace('{CHANNEL}', channel_key)
             
-        logger.info(f"✅ Stream URL costruito: {stream_url}")
+        logger.info(f"✅ Stream URL built: {stream_url}")
         
         stream_headers = {
             'User-Agent': user_agent,
@@ -991,7 +991,7 @@ class DLHDExtractor:
         if channel_id and channel_id in self._stream_data_cache:
             del self._stream_data_cache[channel_id]
             self._save_cache()
-            logger.info(f"🗑️ Cache per il canale ID {channel_id} invalidata a causa di un errore esterno (es. chiave AES).")
+            logger.info(f"🗑️ Cache for channel ID {channel_id} invalidated due to external error (e.g. AES key).")
 
     async def close(self):
         """Chiude definitivamente la sessione"""

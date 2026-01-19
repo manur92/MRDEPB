@@ -71,7 +71,7 @@ class SportsonlineExtractor:
             timeout = ClientTimeout(total=60, connect=30, sock_read=30)
             proxy = self._get_random_proxy()
             if proxy:
-                logger.info(f"Utilizzo del proxy {proxy} per la sessione Sportsonline.")
+                logger.info(f"Using proxy {proxy} for Sportsonline session.")
                 connector = ProxyConnector.from_url(proxy)
             else:
                 connector = TCPConnector(limit=0, limit_per_host=0)
@@ -93,23 +93,23 @@ class SportsonlineExtractor:
         for attempt in range(retries):
             try:
                 session = await self._get_session()
-                logger.info(f"Tentativo {attempt + 1}/{retries} per URL: {url}")
+                logger.info(f"Attempt {attempt + 1}/{retries} for URL: {url}")
                 # Disabilita la decompressione automatica di aiohttp
                 async with session.get(url, headers=request_headers, timeout=timeout, auto_decompress=False) as response:
                     response.raise_for_status()
                     content = await self._handle_response_content(response)
                     return content
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logger.warning(f"⚠️ Errore connessione tentativo {attempt + 1} per {url}: {str(e)}")
+                logger.warning(f"⚠️ Connection error attempt {attempt + 1} for {url}: {str(e)}")
                 if attempt < retries - 1:
                     delay = initial_delay * (2 ** attempt)
                     await asyncio.sleep(delay)
                 else:
-                    raise ExtractorError(f"Tutti i {retries} tentativi falliti per {url}: {str(e)}")
+                    raise ExtractorError(f"All {retries} attempts failed for {url}: {str(e)}")
             except Exception as e: # Cattura altri potenziali errori durante la decompressione/decodifica
-                logger.exception(f"Errore in _make_robust_request per {url}")
-                raise ExtractorError(f"Errore nella richiesta robusta: {str(e)}")
-        raise ExtractorError(f"Impossibile completare la richiesta per {url}")
+                logger.exception(f"Error in _make_robust_request for {url}")
+                raise ExtractorError(f"Error in robust request: {str(e)}")
+        raise ExtractorError(f"Unable to complete request for {url}")
 
     async def _handle_response_content(self, response: aiohttp.ClientResponse) -> str:
         """Gestisce la decompressione manuale del corpo della risposta."""
@@ -117,20 +117,20 @@ class SportsonlineExtractor:
         raw_body = await response.read()
         
         if content_encoding == 'zstd':
-            logger.info(f"Rilevata compressione zstd per {response.url}. Decompressione manuale in streaming.")
+            logger.info(f"Detected zstd compression for {response.url}. Manual streaming decompression.")
             dctx = zstandard.ZstdDecompressor()
             try:
                 decompressed_body = dctx.decompress(raw_body)
                 return decompressed_body.decode(response.charset or 'utf-8')
             except zstandard.ZstdError as zs_e:
-                logger.error(f"Errore durante la decompressione zstd: {zs_e}")
-                raise ExtractorError(f"Errore decompressione zstd: {zs_e}")
+                logger.error(f"Error during zstd decompression: {zs_e}")
+                raise ExtractorError(f"Zstd decompression error: {zs_e}")
         elif content_encoding == 'gzip':
-            logger.info(f"Rilevata compressione gzip per {response.url}. Decompressione manuale.")
+            logger.info(f"Detected gzip compression for {response.url}. Manual decompression.")
             decompressed_body = gzip.decompress(raw_body)
             return decompressed_body.decode(response.charset or 'utf-8')
         elif content_encoding == 'deflate':
-            logger.info(f"Rilevata compressione deflate per {response.url}. Decompressione manuale.")
+            logger.info(f"Detected deflate compression for {response.url}. Manual decompression.")
             decompressed_body = zlib.decompress(raw_body)
             return decompressed_body.decode(response.charset or 'utf-8')
         else:
