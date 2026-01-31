@@ -766,9 +766,9 @@ class DLHDExtractor:
         # Case A: let _var="part1"+"part2"+...;
         # Case B: const _array=["part1","part2",...];let _var=_array.map(x=>x).join('');
 
-        # Pattern to find the line with "let _varname="
-        let_pattern = rf'let\s+{re.escape(secret_var_name)}\s*='
-        let_match = re.search(let_pattern, iframe_html)
+        # Pattern to find the line with "const _varname=" or "let _varname="
+        const_pattern = rf'(?:let|const)\s+{re.escape(secret_var_name)}\s*='
+        let_match = re.search(const_pattern, iframe_html)
 
         if not let_match:
             return None

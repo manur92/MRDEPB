@@ -196,7 +196,14 @@ def setup_recording_routes(app, recording_manager):
         )
 
     async def handle_stream_recording(request):
-        """GET /api/recordings/{id}/stream - Stream a recording file."""
+        """GET /api/recordings/{id}/stream - Stream a recording file.
+
+        For completed recordings: uses efficient FileResponse.
+        For active recordings: streams the growing file with chunked transfer,
+        allowing users to watch while recording continues.
+        """
+        import asyncio
+
         if not check_password(request):
             return web.json_response({"error": "Unauthorized"}, status=401)
 
@@ -225,13 +232,51 @@ def setup_recording_routes(app, recording_manager):
         elif file_path.endswith('.mkv'):
             content_type = "video/x-matroska"
 
-        return web.FileResponse(
-            file_path,
+        # For completed recordings: use efficient FileResponse
+        if not recording.get('is_active'):
+            return web.FileResponse(
+                file_path,
+                headers={
+                    "Content-Type": content_type,
+                    "Access-Control-Allow-Origin": "*"
+                }
+            )
+
+        # For active recordings: stream growing file with chunked transfer
+        response = web.StreamResponse(
+            status=200,
             headers={
                 "Content-Type": content_type,
-                "Access-Control-Allow-Origin": "*"
+                "Transfer-Encoding": "chunked",
+                "Access-Control-Allow-Origin": "*",
+                "Cache-Control": "no-cache"
             }
         )
+        await response.prepare(request)
+
+        logger.info(f"Starting live stream of active recording {recording_id}")
+
+        try:
+            with open(file_path, 'rb') as f:
+                while True:
+                    chunk = f.read(65536)  # 64KB chunks
+                    if chunk:
+                        await response.write(chunk)
+                    else:
+                        # Check if recording is still active
+                        rec = recording_manager.get_recording(recording_id)
+                        if not rec or not rec.get('is_active'):
+                            logger.info(f"Recording {recording_id} finished, ending stream")
+                            break
+                        # Wait for more data from FFmpeg
+                        await asyncio.sleep(0.5)
+        except ConnectionResetError:
+            logger.info(f"Client disconnected from recording {recording_id} stream")
+        except Exception as e:
+            logger.warning(f"Error streaming recording {recording_id}: {e}")
+
+        await response.write_eof()
+        return response
 
     async def handle_active_recordings(request):
         """GET /api/recordings/active - Get only active recordings."""
