@@ -585,23 +585,36 @@ class DLHDExtractor:
                 expires_at = cached_data.get("expires_at")
 
                 is_valid = False
-                
+                current_time = time.time()
+
                 # ✅ Check expiry first (con buffer di 30 secondi)
-                if expires_at and time.time() > (expires_at - 30):
+                if expires_at and current_time > (expires_at - 30):
                      logger.warning(f"⚠️ Cache expired for channel ID {channel_id} (expires_at: {expires_at}).")
                      is_valid = False
-                elif stream_url:
-                    try:
-                        async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as validation_session:
-                            async with validation_session.head(stream_url, headers=stream_headers, ssl=False) as response:
-                                if response.status == 200:
-                                    is_valid = True
-                                    logger.info(f"✅ Cache for channel ID {channel_id} is valid.")
-                                else:
-                                    logger.warning(f"⚠️ Cache for channel ID {channel_id} not valid. Status: {response.status}. Proceeding with extraction.")
-                    except Exception as e:
-                        logger.warning(f"⚠️ Error during cache validation for {channel_id}: {e}. Proceeding with extraction.")
-                
+                else:
+                    # ✅ Only validate with HEAD request if we're within 5 minutes of expiry
+                    # This reduces unnecessary network requests for fresh cache entries
+                    time_until_expiry = expires_at - current_time if expires_at else float('inf')
+                    validation_threshold = 300  # 5 minutes
+
+                    if time_until_expiry < validation_threshold:
+                        logger.info(f"🔍 Cache expires in {int(time_until_expiry)}s, validating with HEAD request...")
+                        try:
+                            # ✅ Use persistent session for cache validation instead of creating new one
+                            session = await self._get_session()
+                            async with session.head(stream_url, headers=stream_headers, ssl=False, timeout=ClientTimeout(total=10)) as response:
+                                    if response.status == 200:
+                                        is_valid = True
+                                        logger.info(f"✅ Cache for channel ID {channel_id} is valid.")
+                                    else:
+                                        logger.warning(f"⚠️ Cache for channel ID {channel_id} not valid. Status: {response.status}. Proceeding with extraction.")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Error during cache validation for {channel_id}: {e}. Proceeding with extraction.")
+                    else:
+                        # Cache is fresh enough, skip validation
+                        is_valid = True
+                        logger.info(f"✅ Cache for channel ID {channel_id} is valid (expires in {int(time_until_expiry)}s, skipping validation).")
+
                 if not is_valid:
                     if channel_id in self._stream_data_cache:
                         del self._stream_data_cache[channel_id]
@@ -814,6 +827,51 @@ class DLHDExtractor:
 
         return None
 
+    def _extract_eplayer_auth_data(self, iframe_html: str) -> dict | None:
+        """
+        Extract auth_token, channel_key, and channel_salt from EPlayerAuth.init block.
+
+        The EPlayerAuth.init block has this format:
+        EPlayerAuth.init({
+            authToken: 'premium860|IT|1769803458|1769889858|98cdbdf2b86c8c63a5fe59d779b3a33e976613d0ec726e74225ed469567eb3c3',
+            channelKey: 'premium860',
+            country: 'IT',
+            timestamp: 1769803458,
+            validDomain: 'codepcplay.fun',
+            channelSalt: '5a64ab0085fb21c0402b6fcf3d753c3a91b660644c5afa186e046c9ca702bf4a'
+        });
+
+        Args:
+            iframe_html: The HTML content from the iframe URL
+
+        Returns:
+            Dict with auth_token, channel_key, channel_salt, server_lookup_url or None
+        """
+        # Pattern to extract EPlayerAuth.init block
+        auth_pattern = r"EPlayerAuth\.init\s*\(\s*\{\s*authToken:\s*'([^']+)'"
+        channel_key_pattern = r"channelKey:\s*'([^']+)'"
+        channel_salt_pattern = r"channelSalt:\s*'([^']+)'"
+
+        # Pattern to extract server lookup base URL from fetchWithRetry call
+        lookup_pattern = r"fetchWithRetry\s*\(\s*'([^']+server_lookup\?channel_id=)"
+
+        auth_match = re.search(auth_pattern, iframe_html)
+        channel_key_match = re.search(channel_key_pattern, iframe_html)
+        channel_salt_match = re.search(channel_salt_pattern, iframe_html)
+        lookup_match = re.search(lookup_pattern, iframe_html)
+
+        if auth_match and channel_key_match and channel_salt_match:
+            result = {
+                "auth_token": auth_match.group(1),
+                "channel_key": channel_key_match.group(1),
+                "channel_salt": channel_salt_match.group(1),
+            }
+            if lookup_match:
+                result["server_lookup_url"] = lookup_match.group(1) + result["channel_key"]
+
+            return result
+
+        return None
 
     def _extract_obfuscated_session_data(self, iframe_html: str) -> dict | None:
         """
@@ -862,44 +920,58 @@ class DLHDExtractor:
 
         logger.info("Tentativo rilevamento nuovo flusso auth obfuscated...")
 
-        # 1. Prima prova l'estrazione strutturata per pattern obfuscati (var_[a-f0-9]+)
-        obfuscated_data = self._extract_obfuscated_session_data(iframe_content)
+        # 1. First try EPlayerAuth.init extraction (new method)
+        eplayer_data = self._extract_eplayer_auth_data(iframe_content)
 
         params = {}
         secret_key = None
+        data_found = False
 
-        if obfuscated_data:
-            logger.info("✅ Rilevato pattern obfuscated (var_xxx)")
-            params['auth_token'] = obfuscated_data.get('session_token')
-            params['channel_key'] = obfuscated_data.get('channel_key')
-            secret_key = obfuscated_data.get('secret_key')
+        if eplayer_data:
+            logger.info("✅ Rilevato pattern EPlayerAuth.init")
+            params['auth_token'] = eplayer_data.get('auth_token')
+            params['channel_key'] = eplayer_data.get('channel_key')
+            secret_key = eplayer_data.get('channel_salt')
+            data_found = True
             if secret_key:
-                logger.info(f"✅ Secret key estratta per calcolo nonce")
+                logger.info(f"✅ Channel salt estratto per calcolo nonce")
         else:
-            # Fallback: estrazione euristica originale
-            logger.info("Pattern obfuscated non trovato, provo estrazione euristica...")
+            # 2. Fallback to obfuscated extraction (var_[a-f0-9]+)
+            obfuscated_data = self._extract_obfuscated_session_data(iframe_content)
 
-            # Cerca il JWT (inizia con eyJ...)
-            jwt_match = re.search(r'["\'](eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+)["\']', iframe_content)
-            if jwt_match:
-                params['auth_token'] = jwt_match.group(1)
-                logger.info("✅ Trovato possibile JWT Token")
-
-            # Cerca Channel Key (es: premium853) - o stringa alfanumerica di media lunghezza
-            key_matches = re.finditer(r'["\']([a-z]+[0-9]+)["\']', iframe_content)
-            for m in key_matches:
-                val = m.group(1)
-                # Filtro euristico: deve sembrare una chiave canale
-                if re.match(r'^(premium|dad|sport|live)[0-9]+$', val):
-                    params['channel_key'] = val
-                    logger.info(f"✅ Trovata possibile Channel Key: {val}")
-                    break
-
-            # Prova a estrarre secret_key anche con estrazione euristica
-            if params.get('channel_key'):
-                secret_key = self._extract_secret_key(iframe_content, params['channel_key'])
+            if obfuscated_data:
+                logger.info("✅ Rilevato pattern obfuscated (var_xxx)")
+                params['auth_token'] = obfuscated_data.get('session_token')
+                params['channel_key'] = obfuscated_data.get('channel_key')
+                secret_key = obfuscated_data.get('secret_key')
+                data_found = True
                 if secret_key:
-                    logger.info(f"✅ Secret key estratta (fallback)")
+                    logger.info(f"✅ Secret key estratta per calcolo nonce")
+            else:
+                # Fallback: estrazione euristica originale
+                logger.info("Pattern obfuscated non trovato, provo estrazione euristica...")
+
+                # Cerca il JWT (inizia con eyJ...)
+                jwt_match = re.search(r'["\'](eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+)["\']', iframe_content)
+                if jwt_match:
+                    params['auth_token'] = jwt_match.group(1)
+                    logger.info("✅ Trovato possibile JWT Token")
+
+                # Cerca Channel Key (es: premium853) - o stringa alfanumerica di media lunghezza
+                key_matches = re.finditer(r'["\']([a-z]+[0-9]+)["\']', iframe_content)
+                for m in key_matches:
+                    val = m.group(1)
+                    # Filtro euristico: deve sembrare una chiave canale
+                    if re.match(r'^(premium|dad|sport|live)[0-9]+$', val):
+                        params['channel_key'] = val
+                        logger.info(f"✅ Trovata possibile Channel Key: {val}")
+                        break
+
+                # Prova a estrarre secret_key anche con estrazione euristica
+                if params.get('channel_key'):
+                    secret_key = self._extract_secret_key(iframe_content, params['channel_key'])
+                    if secret_key:
+                        logger.info(f"✅ Secret key estratta (fallback)")
 
         # Cerca Country (2 lettere maiuscole)
         country_match = re.search(r'["\']([A-Z]{2})["\']', iframe_content)
