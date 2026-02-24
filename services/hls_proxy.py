@@ -4,6 +4,7 @@ import re
 import sys
 import random
 import os
+import socket
 import urllib.parse
 from urllib.parse import urlparse, urljoin
 import base64
@@ -302,7 +303,8 @@ class HLSProxy:
                 limit=0,  # Unlimited connections
                 limit_per_host=0,  # Unlimited per host
                 keepalive_timeout=60,  # Keep connections alive longer
-                enable_cleanup_closed=True
+                enable_cleanup_closed=True,
+                family=socket.AF_INET  # Force IPv4 to avoid IPv6 issues (e.g. Vavoo promo)
             )
             self.session = aiohttp.ClientSession(
                 timeout=ClientTimeout(total=30),
@@ -340,7 +342,8 @@ class HLSProxy:
                     proxy,
                     limit=0,  # Unlimited connections
                     limit_per_host=0,  # Unlimited per host
-                    keepalive_timeout=60  # Keep connections alive longer
+                    keepalive_timeout=60,  # Keep connections alive longer
+                    family=socket.AF_INET  # Force IPv4
                 )
                 timeout = ClientTimeout(total=30)
                 session = ClientSession(timeout=timeout, connector=connector)
@@ -1431,12 +1434,13 @@ class HLSProxy:
                         )
                     
                     # Gestione special per manifest HLS
-                    # ✅ Gestisce manifest HLS standard e mascherati da .css (usati da DLHD)
-                    # Per .css, verifica se contiene #EXTM3U (signature HLS) per rilevare manifest mascherati
+                    # ✅ Gestisce manifest HLS standard
+                    # Nota: Il supporto per manifest mascherati da .css (DLHD vecchio stile) o .csv è mantenuto per compatibilità
                     is_hls_manifest = 'mpegurl' in content_type or stream_url.endswith('.m3u8')
-                    is_css_file = stream_url.endswith('mono.css')
+                    is_css_file = stream_url.endswith('mono.css') or stream_url.endswith('.css')
+                    is_csv_file = stream_url.endswith('.csv')
                     
-                    if is_hls_manifest or is_css_file:
+                    if is_hls_manifest or is_css_file or is_csv_file:
                         try:
                             # Leggi come bytes prima per evitare crash su decode
                             content_bytes = await resp.read()
@@ -1456,16 +1460,16 @@ class HLSProxy:
                                     }
                                 )
 
-                            # Per .css, verifica che sia effettivamente un manifest HLS
-                            if is_css_file and not manifest_content.strip().startswith('#EXTM3U'):
-                                # Non è un manifest HLS, restituisci come CSS normale
+                            # Per file mascherati, verifica che siano effettivamente manifest HLS
+                            if (is_css_file or is_csv_file) and not manifest_content.strip().startswith('#EXTM3U'):
+                                # Non è un manifest HLS, restituisci come file normale
                                 return web.Response(
                                     text=manifest_content,
-                                    content_type=content_type or 'text/css',
+                                    content_type=content_type or 'text/plain',
                                     headers={'Access-Control-Allow-Origin': '*'}
                                 )
                         except Exception as e:
-                             logger.error(f"Error processing manifest/css: {e}")
+                             logger.error(f"Error processing manifest/css/csv: {e}")
                              # Fallback to binary proxy
                              return web.Response(body=await resp.read(), status=resp.status, headers={'Access-Control-Allow-Origin': '*'})
                         
@@ -1477,8 +1481,12 @@ class HLSProxy:
                         
                         api_password = request.query.get('api_password')
                         no_bypass = request.query.get('no_bypass') == '1'
+                        
+                        # Use the final URL after redirects as the base for rewriting relative paths
+                        final_stream_url = str(resp.url)
+                        
                         rewritten_manifest = await ManifestRewriter.rewrite_manifest_urls(
-                            manifest_content, stream_url, proxy_base, headers, original_channel_url, api_password, self.get_extractor, no_bypass
+                            manifest_content, final_stream_url, proxy_base, headers, original_channel_url, api_password, self.get_extractor, no_bypass
                         )
                         
                         return web.Response(

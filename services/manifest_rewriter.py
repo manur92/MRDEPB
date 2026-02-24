@@ -7,10 +7,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Conditional import for DLHD detection
+# (Rimosso perché non serve più logica speciale per DLHD nel rewriter)
 try:
-    from extractors.dlhd import DLHDExtractor
+    DLHDExtractor = None # Placeholder per compatibilità se servisse in futuro
 except ImportError:
-    DLHDExtractor = None
+    pass
 
 class ManifestRewriter:
     @staticmethod
@@ -143,9 +144,8 @@ class ManifestRewriter:
         lines = manifest_content.split('\n')
         rewritten_lines = []
 
-        # Determina se è VixSrc o DLHD
+        # Determina se è VixSrc (logica speciale per quality selection)
         is_vixsrc_stream = False
-        is_dlhd_stream = False
         logger.info(f"Manifest rewriter called with base_url: {base_url}")
         
         try:
@@ -156,9 +156,6 @@ class ManifestRewriter:
                 if hasattr(extractor, 'is_vixsrc') and extractor.is_vixsrc:
                     is_vixsrc_stream = True
                     logger.info("Detected VixSrc stream.")
-                elif DLHDExtractor and isinstance(extractor, DLHDExtractor):
-                    is_dlhd_stream = True
-                    logger.info(f"✅ Detected DLHD stream. Will be fully proxied.")
         except Exception as e:
             logger.error(f"Error in extractor detection: {e}")
             pass
@@ -187,19 +184,9 @@ class ManifestRewriter:
                 rewritten_lines.append(highest_quality_stream['url'])
                 return '\n'.join(rewritten_lines)
 
-        # --- Logica Standard (incluso DLHD) ---
-        # ✅ FIX DLHD: Il CDN dei segmenti (ai.playerfuncc.fun) è S3-style e rifiuta headers
-        # come Authorization e X-Channel-Key con "InvalidArgument". Per DLHD, passiamo solo
-        # gli headers necessari (Referer, User-Agent, Origin) ai segmenti.
-        if is_dlhd_stream:
-            # Per DLHD, filtra solo gli headers che il CDN accetta
-            segment_headers = {k: v for k, v in stream_headers.items() 
-                             if k.lower() in ['referer', 'user-agent', 'origin']}
-            header_params = "".join([f"&h_{urllib.parse.quote(key)}={urllib.parse.quote(value)}" 
-                                    for key, value in segment_headers.items()])
-        else:
-            header_params = "".join([f"&h_{urllib.parse.quote(key)}={urllib.parse.quote(value)}" 
-                                    for key, value in stream_headers.items()])
+        # --- Logica Standard ---
+        header_params = "".join([f"&h_{urllib.parse.quote(key)}={urllib.parse.quote(value)}" 
+                                for key, value in stream_headers.items()])
         
         if api_password:
             header_params += f"&api_password={api_password}"
