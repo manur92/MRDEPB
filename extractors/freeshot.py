@@ -102,7 +102,7 @@ class FreeshotExtractor:
         
         # Token extraction (no need for try-except wrapper since ExtractorError propagates)
         # Nuova estrazione token via currentToken
-        match = re.search(r'currentToken:\s*["\']([^"\']+)["\']', body)
+        match = re.search(r'streamUrl\s*:\s*"([^"]+)"', body)
         if not match:
             # Fallback al vecchio metodo iframe
             match = re.search(r'frameborder="0"\s+src="([^"]+)"', body, re.IGNORECASE)
@@ -112,15 +112,16 @@ class FreeshotExtractor:
                 token_match = re.search(r'token=([^&]+)', iframe_url)
                 if token_match:
                     token = token_match.group(1)
+                    # Nuovo formato URL m3u8: tracks-v1a1/mono.m3u8
+                    m3u8_url = f"https://planetary.lovecdn.ru/{channel_code}/tracks-v1a1/mono.m3u8?token={token}"
                 else:
                     raise ExtractorError("Freeshot token not found in iframe")
             else:
                 raise ExtractorError("Freeshot token/iframe not found in page content")
         else:
-            token = match.group(1)
-        
-        # Nuovo formato URL m3u8: tracks-v1a1/mono.m3u8
-        m3u8_url = f"https://planetary.lovecdn.ru/{channel_code}/tracks-v1a1/mono.m3u8?token={token}"
+            # Nuovo formato URL m3u8: tracks-v1a1/mono.m3u8
+            m3u8_url = match.group(1)
+            m3u8_url = m3u8_url.replace("\\", "")
         
         logger.info(f"FreeshotExtractor: Risolto -> {m3u8_url}")
         
