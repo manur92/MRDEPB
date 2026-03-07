@@ -2,7 +2,8 @@ import asyncio
 import logging
 import re
 import json
-from urllib.parse import urlparse
+import time
+from urllib.parse import urlparse, urljoin
 from typing import Dict, Any
 import gzip
 import zlib
@@ -62,9 +63,89 @@ class SportsonlineExtractor:
         self.mediaflow_endpoint = "hls_manifest_proxy"
         self._session_lock = asyncio.Lock()
         self.proxies = proxies or []
+        self._failed_iframe_hosts: dict[str, float] = {}
+        self._preferred_iframe_url: str | None = None
+        self._failed_iframe_ttl_seconds = 300
 
     def _get_random_proxy(self):
         return random.choice(self.proxies) if self.proxies else None
+
+    @staticmethod
+    def _dedupe_preserve_order(items: list[str]) -> list[str]:
+        seen = set()
+        result = []
+        for item in items:
+            if item and item not in seen:
+                seen.add(item)
+                result.append(item)
+        return result
+
+    def _normalize_candidate_url(self, raw_url: str, base_url: str) -> str:
+        candidate = raw_url.strip().replace('\\/', '/')
+        if candidate.startswith('//'):
+            return f"https:{candidate}"
+        return urljoin(base_url, candidate)
+
+    def _cleanup_failed_iframe_hosts(self):
+        if not self._failed_iframe_hosts:
+            return
+        now = time.time()
+        expired = [host for host, ts in self._failed_iframe_hosts.items() if now - ts >= self._failed_iframe_ttl_seconds]
+        for host in expired:
+            self._failed_iframe_hosts.pop(host, None)
+
+    def _is_recently_failed_iframe_host(self, candidate_url: str) -> bool:
+        host = urlparse(candidate_url).netloc.lower()
+        if not host:
+            return False
+        ts = self._failed_iframe_hosts.get(host)
+        if ts is None:
+            return False
+        return (time.time() - ts) < self._failed_iframe_ttl_seconds
+
+    def _mark_iframe_host_failed(self, candidate_url: str):
+        host = urlparse(candidate_url).netloc.lower()
+        if host:
+            self._failed_iframe_hosts[host] = time.time()
+
+    def _mark_iframe_host_success(self, candidate_url: str):
+        host = urlparse(candidate_url).netloc.lower()
+        if host:
+            self._failed_iframe_hosts.pop(host, None)
+
+    def _order_iframe_candidates(self, candidates: list[str]) -> list[str]:
+        self._cleanup_failed_iframe_hosts()
+        ordered = list(candidates)
+
+        # Prefer the last working iframe URL first to reduce repeated retries.
+        if self._preferred_iframe_url and self._preferred_iframe_url in ordered:
+            ordered.remove(self._preferred_iframe_url)
+            ordered.insert(0, self._preferred_iframe_url)
+
+        viable = [url for url in ordered if not self._is_recently_failed_iframe_host(url)]
+
+        # If all candidates are currently failed, probe the first one to recover automatically.
+        if not viable and ordered:
+            viable = [ordered[0]]
+
+        return viable
+
+    def _get_iframe_candidates(self, html: str, base_url: str) -> list[str]:
+        candidates = []
+
+        # Primary source: iframe tags in the channel page.
+        for match in re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE):
+            candidates.append(self._normalize_candidate_url(match, base_url))
+
+        # Fallback source: embed URLs in scripts.
+        embed_pattern = re.compile(
+            r'((?:https?:)?//[a-zA-Z0-9.-]+/(?:embed|player|e)/[a-zA-Z0-9_\-/?=&%.]+)',
+            re.IGNORECASE
+        )
+        for match in embed_pattern.findall(html):
+            candidates.append(self._normalize_candidate_url(match, base_url))
+
+        return self._dedupe_preserve_order(candidates)
 
     async def _get_session(self):
         if self.session is None or self.session.closed:
@@ -100,7 +181,9 @@ class SportsonlineExtractor:
                     content = await self._handle_response_content(response)
                     return content
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logger.warning(f"⚠️ Connection error attempt {attempt + 1} for {url}: {str(e)}")
+                logger.warning(f"Connection error attempt {attempt + 1} for {url}: {str(e)}")
+                if isinstance(e, aiohttp.ClientConnectorDNSError):
+                    raise ExtractorError(f"DNS resolution failed for {url}: {str(e)}")
                 if attempt < retries - 1:
                     delay = initial_delay * (2 ** attempt)
                     await asyncio.sleep(delay)
@@ -154,18 +237,14 @@ class SportsonlineExtractor:
             logger.info(f"Fetching main page: {url}")
             main_html = await self._make_robust_request(url)
 
-            iframe_match = re.search(r'<iframe\s+src=["\']([^"\']+)["\']', main_html, re.IGNORECASE)
-            if not iframe_match:
+            iframe_candidates = self._get_iframe_candidates(main_html, url)
+            if not iframe_candidates:
                 raise ExtractorError("No iframe found on the page")
 
-            iframe_url = iframe_match.group(1)
-            if iframe_url.startswith('//'):
-                iframe_url = 'https:' + iframe_url
-            elif iframe_url.startswith('/'):
-                parsed_main = urlparse(url)
-                iframe_url = f"{parsed_main.scheme}://{parsed_main.netloc}{iframe_url}"
-            
-            logger.info(f"Found iframe URL: {iframe_url}")
+            ordered_iframe_candidates = self._order_iframe_candidates(iframe_candidates)
+            logger.info(
+                f"Found {len(iframe_candidates)} iframe candidate(s), trying {len(ordered_iframe_candidates)} viable candidate(s)"
+            )
 
             iframe_headers = {
                 'Referer': 'https://sportzonline.st/',
@@ -174,8 +253,29 @@ class SportsonlineExtractor:
                 'Accept-Language': 'en-US,en;q=0.9,it;q=0.8',
                 'Cache-Control': 'no-cache'
             }
-            
-            iframe_html = await self._make_robust_request(iframe_url, headers=iframe_headers)
+
+            iframe_html = None
+            iframe_url = None
+            last_iframe_error = None
+
+            for candidate_url in ordered_iframe_candidates:
+                try:
+                    logger.info(f"Trying iframe candidate: {candidate_url}")
+                    iframe_html = await self._make_robust_request(candidate_url, headers=iframe_headers)
+                    iframe_url = candidate_url
+                    self._preferred_iframe_url = candidate_url
+                    self._mark_iframe_host_success(candidate_url)
+                    break
+                except ExtractorError as iframe_error:
+                    last_iframe_error = iframe_error
+                    self._mark_iframe_host_failed(candidate_url)
+                    logger.warning(f"Iframe candidate failed: {candidate_url} -> {iframe_error}")
+
+            if not iframe_html or not iframe_url:
+                raise ExtractorError(
+                    f"All iframe candidates failed ({len(ordered_iframe_candidates)}): {last_iframe_error}"
+                )
+
             logger.debug(f"Iframe HTML length: {len(iframe_html)}")
 
             packed_blocks = self._detect_packed_blocks(iframe_html)
